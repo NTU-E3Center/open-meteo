@@ -61,8 +61,11 @@ JMA_HOURS=$(python3 -c "
 import datetime
 off = round(datetime.datetime.now().astimezone().utcoffset().total_seconds()/3600)
 print(','.join(str((h+off)%24) for h in (1,7,13,19)))")
-( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" || true
-  echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin ${CRON_MARK}"
+# NOTE: cron env-var lines do NOT support trailing comments (the comment would become
+# part of the value and corrupt PATH) — so the PATH line carries no marker; dedup
+# matches it by the venv path instead.
+( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" | grep -v "^PATH=.*om-venv" || true
+  echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
   echo "30 ${FULL_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh >> ${LOG_DIR}/full.log 2>&1 ${CRON_MARK}"
   echo "30 ${JMA_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh jma_msm >> ${LOG_DIR}/jma.log 2>&1 ${CRON_MARK}"
 ) | crontab -
