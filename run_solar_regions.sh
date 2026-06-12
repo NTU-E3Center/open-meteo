@@ -137,12 +137,21 @@ src, dst = sys.argv[1], sys.argv[2]
 df = pd.read_parquet(src)
 meta = {'location_id','latitude','longitude','elevation','time'}
 for c in df.columns:
-    if c not in meta:
-        df[c] = df[c].round(2)
+    if c in meta:
+        continue
+    df[c] = df[c].round(2)
+    # Integer-cast columns whose SOURCE quantization step is 1 (values identical,
+    # integers compress ~10% better than float32 carrying conversion noise).
+    # Variables with sub-unit steps (temperature 0.05; wind/pressure/precip 0.1) stay float32.
+    if 'cloud_cover' in c or 'relative_humidity' in c:
+        df[c] = df[c].clip(lower=0, upper=255).round().astype('UInt8')
+    elif 'radiation' in c or 'irradiance' in c:
+        df[c] = df[c].clip(lower=0).round().astype('UInt16')
+df['location_id'] = df['location_id'].astype('int32')
 # Self-describing provenance columns (constant -> RLE-compresses to almost nothing):
 df['run_init'] = pd.Timestamp(pd.to_datetime(os.environ['RUN_STAMP'], format='%Y%m%dT%HZ', utc=True)).tz_localize(None)
 df['scraped_at'] = pd.Timestamp(pd.to_datetime(os.environ['SCRAPED_AT'], format='%Y%m%dT%H%M%SZ', utc=True)).tz_localize(None)
-df.to_parquet(dst, compression='zstd')
+df.to_parquet(dst, compression='zstd', compression_level=12)
 PYEOF
       # HF filename = model run init time. Re-scrapes of the same run overwrite (idempotent).
       echo "[$(date -u)]     uploading run ${RUN_STAMP} to hf://datasets/${HF_DATASET_REPO}"
