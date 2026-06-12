@@ -1,0 +1,24 @@
+# Local variant of Dockerfile: the upstream run base (docker-container-run) currently
+# ships Arrow 22 (libparquet-glib.so.2200) while the build base compiles against
+# Arrow 24 (.so.2400), so binaries fail to load in the official run image.
+# Workaround: use the build base as the runtime too (bigger image, all libs present).
+FROM ghcr.io/open-meteo/docker-container-build:latest AS build
+WORKDIR /build
+COPY ./Package.* ./
+RUN ENABLE_PARQUET=TRUE swift package resolve
+COPY . .
+RUN ENABLE_PARQUET=TRUE MARCH_SKYLAKE=TRUE swift build -c release
+
+# Runtime: same base as build, so every shared library matches
+FROM ghcr.io/open-meteo/docker-container-build:latest
+RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app openmeteo
+WORKDIR /app
+COPY --from=build --chown=openmeteo:openmeteo /build/.build/release/openmeteo-api /app
+RUN mkdir -p /app/Resources
+COPY --from=build --chown=openmeteo:openmeteo /build/.build/release/SwiftTimeZoneLookup_SwiftTimeZoneLookup.resources /app/Resources/SwiftTimeZoneLookup_SwiftTimeZoneLookup.resources
+COPY --from=build --chown=openmeteo:openmeteo /build/Public /app/Public
+RUN mkdir /app/data && chown openmeteo:openmeteo /app/data
+VOLUME /app/data
+USER openmeteo:openmeteo
+ENTRYPOINT ["./openmeteo-api"]
+CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]

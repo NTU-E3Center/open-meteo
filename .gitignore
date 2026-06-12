@@ -14,3 +14,8 @@ data_spatial
 .cache
 .venv
 .vscode/
+# Local pipeline artifacts (data outputs, caches)
+out/
+export_test/
+.ipynb_checkpoints/
+*.gif
