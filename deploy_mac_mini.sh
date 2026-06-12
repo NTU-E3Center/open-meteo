@@ -65,4 +65,4 @@ crontab -l | grep "${CRON_MARK}"
 echo
 echo "=== Deployment complete ==="
 echo "Logs:   ${LOG_DIR}/full.log, ${LOG_DIR}/jma.log"
-echo "Local retention: LOCAL_RETENTION_DAYS=7 (HF is the canonical archive)"
+echo "Local retention: LOCAL_RETENTION_DAYS=2 (HF is the canonical archive)"

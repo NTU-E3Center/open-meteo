@@ -33,7 +33,7 @@ OUT_DIR="${OUT_DIR:-$(cd "$(dirname "$0")" && pwd)/out}"   # default: ./out next
 # Local retention: HF is the canonical archive; local files are only a debugging buffer.
 # Files older than this many days are deleted at the end of each run (0 = delete all
 # already-uploaded local files immediately; set to a huge number to keep everything).
-LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-7}"
+LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-2}"
 
 # Models: "domain forecastDays" — horizons differ per model.
 #   dwd_icon             : DWD ICON global, 11 km, 6-hourly runs, 7.5-day horizon. direct/diffuse NATIVE.
