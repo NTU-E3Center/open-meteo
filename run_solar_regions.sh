@@ -28,7 +28,12 @@ IMAGE="open-meteo:bbox-fix"
 REMOTE_DATA="https://openmeteo.s3.amazonaws.com/data/"
 CACHE_VOLUME="open-meteo-cache"
 CACHE_SIZE="6GB"                       # multi-model transfers ~2GB+/cycle; keep headroom
-OUT_DIR="${HOME}/Desktop/projects/open-meteo/out"
+OUT_DIR="${OUT_DIR:-$(cd "$(dirname "$0")" && pwd)/out}"   # default: ./out next to this script
+
+# Local retention: HF is the canonical archive; local files are only a debugging buffer.
+# Files older than this many days are deleted at the end of each run (0 = delete all
+# already-uploaded local files immediately; set to a huge number to keep everything).
+LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-7}"
 
 # Models: "domain forecastDays" — horizons differ per model.
 #   dwd_icon             : DWD ICON global, 11 km, 6-hourly runs, 7.5-day horizon. direct/diffuse NATIVE.
@@ -151,4 +156,10 @@ PYEOF
   done
 done
 
-echo "[$(date -u)] Done: ${#MODELS[@]} models x ${#REGIONS[@]} regions exported"
+# Clean up old local parquet files (HF holds the canonical archive)
+if [ -n "${LOCAL_RETENTION_DAYS}" ]; then
+  DELETED=$(find "${OUT_DIR}" -name '*.parquet' -mtime +"${LOCAL_RETENTION_DAYS}" -print -delete | wc -l | tr -d ' ')
+  [ "${DELETED}" != "0" ] && echo "[$(date -u)] Local cleanup: removed ${DELETED} parquet file(s) older than ${LOCAL_RETENTION_DAYS} days"
+fi
+
+echo "[$(date -u)] Done: exported $( [ -n "${ONLY_MODEL}" ] && echo "1 model (${ONLY_MODEL})" || echo "${#MODELS[@]} models" ) x ${#REGIONS[@]} regions"
