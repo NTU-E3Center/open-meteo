@@ -19,9 +19,16 @@ docker info >/dev/null 2>&1 || { echo "ERROR: docker daemon not running. Start D
 command -v python3 >/dev/null || { echo "ERROR: python3 not found."; exit 1; }
 echo "docker + python3 OK"
 
-echo "=== 2/6 Python deps + HF CLI ==="
-python3 -m pip install -q --upgrade pandas pyarrow "huggingface_hub[cli]"
-command -v hf >/dev/null || { echo "ERROR: 'hf' CLI not on PATH after install. Check python3 -m pip bin dir."; exit 1; }
+echo "=== 2/6 Python deps + HF CLI (venv) ==="
+# Homebrew pythons are PEP-668 "externally managed" — use a dedicated venv.
+# Prefer 3.12 (mature wheel coverage) over the newest brew python.
+VENV="${HOME}/.om-venv"
+PYBIN="$(command -v python3.12 || command -v python3)"
+"${PYBIN}" -m venv "${VENV}"
+"${VENV}/bin/pip" install -q --upgrade pandas pyarrow "huggingface_hub[cli]"
+export PATH="${VENV}/bin:${PATH}"
+command -v hf >/dev/null || { echo "ERROR: 'hf' CLI not found in venv."; exit 1; }
+echo "venv: ${VENV} ($(python3 --version))"
 
 echo "=== 3/6 Hugging Face auth ==="
 if hf auth whoami >/dev/null 2>&1; then
@@ -55,7 +62,7 @@ import datetime
 off = round(datetime.datetime.now().astimezone().utcoffset().total_seconds()/3600)
 print(','.join(str((h+off)%24) for h in (1,7,13,19)))")
 ( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" || true
-  echo "PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin ${CRON_MARK}"
+  echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin ${CRON_MARK}"
   echo "30 ${FULL_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh >> ${LOG_DIR}/full.log 2>&1 ${CRON_MARK}"
   echo "30 ${JMA_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh jma_msm >> ${LOG_DIR}/jma.log 2>&1 ${CRON_MARK}"
 ) | crontab -
