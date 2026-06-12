@@ -84,6 +84,19 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${OUT_DIR}"
 docker volume create "${CACHE_VOLUME}" >/dev/null
 
+# Leave a trace if set -e aborts the script (otherwise failures are silent in cron logs)
+trap 'code=$?; [ $code -ne 0 ] && echo "[$(date -u)] FATAL: pipeline aborted (exit ${code})"' EXIT
+
+# Prevent overlapping runs (a slow cold-cache cycle can exceed the cron interval).
+# mkdir is atomic; macOS has no flock(1). A skipped refresh beats two racing pipelines.
+LOCKDIR="${OUT_DIR}/.pipeline.lock"
+if ! mkdir "${LOCKDIR}" 2>/dev/null; then
+  echo "[$(date -u)] SKIP: another pipeline run is in progress (${LOCKDIR} exists)"
+  trap - EXIT
+  exit 0
+fi
+trap 'code=$?; rmdir "'"${LOCKDIR}"'" 2>/dev/null; [ $code -ne 0 ] && echo "[$(date -u)] FATAL: pipeline aborted (exit ${code})"' EXIT
+
 echo "[$(date -u)] === Open-Meteo multi-model solar pipeline (remote mode) ==="
 echo "  models=${#MODELS[@]}  regions=${#REGIONS[@]}  start=${START_DATE}  land_only=${IGNORE_SEA:-no}"
 
@@ -106,18 +119,32 @@ print(datetime.datetime.fromtimestamp(m['last_run_initialisation_time'], datetim
     read -r NAME LAT LON <<< "${region}"
     OUT_FILE="${NAME}_${DOMAIN}_${STAMP}.parquet"
     echo "[$(date -u)] --- ${DOMAIN} run ${RUN_STAMP} / ${NAME}: ${START_DATE}..${END_DATE}, lat ${LAT}, lon ${LON} -> ${OUT_FILE}"
-    docker run --rm \
-      -v "${CACHE_VOLUME}":/app/data \
-      -v "${OUT_DIR}":/out \
-      -e REMOTE_DATA_DIRECTORY="${REMOTE_DATA}" \
-      -e CACHE_SIZE="${CACHE_SIZE}" \
-      --entrypoint /app/openmeteo-api "${IMAGE}" \
-      export "${DOMAIN}" "${EXPORT_VARS}" \
-      --start_date "${START_DATE}" --end_date "${END_DATE}" \
-      --latitude-bounds "${LAT}" --longitude-bounds "${LON}" \
-      ${IGNORE_SEA} \
-      --concurrent "${CONCURRENT}" \
-      --format parquet -o "/out/${OUT_FILE}"
+    # One model's failure must not kill the remaining models (transient S3 stream
+    # breaks crash the exporter with an uncaught HTTPParserError) — retry once,
+    # then skip this model and continue.
+    EXPORT_OK=false
+    for attempt in 1 2; do
+      if docker run --rm \
+        -v "${CACHE_VOLUME}":/app/data \
+        -v "${OUT_DIR}":/out \
+        -e REMOTE_DATA_DIRECTORY="${REMOTE_DATA}" \
+        -e CACHE_SIZE="${CACHE_SIZE}" \
+        --entrypoint /app/openmeteo-api "${IMAGE}" \
+        export "${DOMAIN}" "${EXPORT_VARS}" \
+        --start_date "${START_DATE}" --end_date "${END_DATE}" \
+        --latitude-bounds "${LAT}" --longitude-bounds "${LON}" \
+        ${IGNORE_SEA} \
+        --concurrent "${CONCURRENT}" \
+        --format parquet -o "/out/${OUT_FILE}"; then
+        EXPORT_OK=true; break
+      fi
+      echo "[$(date -u)]     WARN: ${DOMAIN} export attempt ${attempt} failed"
+      [ "${attempt}" -lt 2 ] && sleep 60
+    done
+    if [ "${EXPORT_OK}" != "true" ]; then
+      echo "[$(date -u)]     ERROR: ${DOMAIN} export failed twice — skipping this model this cycle"
+      continue
+    fi
     ls -lh "${OUT_DIR}/${OUT_FILE}"
 
     # Upload to Hugging Face if configured and logged in.
@@ -154,7 +181,7 @@ df['scraped_at'] = pd.Timestamp(pd.to_datetime(os.environ['SCRAPED_AT'], format=
 df.to_parquet(dst, compression='zstd', compression_level=12)
 PYEOF
       # HF filename = model run init time. Re-scrapes of the same run overwrite (idempotent).
-      echo "[$(date -u)]     uploading run ${RUN_STAMP} to hf://datasets/${HF_DATASET_REPO}"
+      echo "[$(date -u)]     uploading ${DOMAIN} run ${RUN_STAMP} to hf://datasets/${HF_DATASET_REPO}"
       # Hive-style layout: data/model=<domain>/year=YYYY/month=MM/<runStamp>.parquet
       hf upload "${HF_DATASET_REPO}" "${TMP_FILE}" \
         "data/model=${DOMAIN}/year=${RUN_STAMP:0:4}/month=${RUN_STAMP:4:2}/${RUN_STAMP}.parquet" \
