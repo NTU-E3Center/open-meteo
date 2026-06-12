@@ -13,7 +13,7 @@
 # = -44..-10 — the stock CLI parser rejects values starting with "-").
 # Build with: docker build -t open-meteo:bbox-fix .
 #
-# See HANDOFF_japan_taiwan_solar.md for background and validation history.
+# Background and validation history: see RADIATION_INTERPOLATION.md and the git log.
 #
 set -euo pipefail
 
