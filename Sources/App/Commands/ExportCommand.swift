@@ -148,10 +148,10 @@ struct ExportCommand: AsyncCommand {
         @Option(name: "rain-day-distribution")
         var rainDayDistribution: String?
 
-        @Option(name: "latitude-bounds")
+        @Option(name: "latitude-bounds", help: "Min,max latitude. Use 'm' as minus prefix for negative values, e.g. 'm44,m10' for -44..-10")
         var latitudeBounds: String?
 
-        @Option(name: "longitude-bounds")
+        @Option(name: "longitude-bounds", help: "Min,max longitude. Use 'm' as minus prefix for negative values, e.g. 'm160,m120' for -160..-120")
         var longitudeBounds: String?
         
         @Flag(name: "only-full-bounding-box", help: "The entire domain must cover the bounding box. Otherwise cancel.")
@@ -201,12 +201,14 @@ struct ExportCommand: AsyncCommand {
 
         let filePath = signature.outputFilename ?? (format == .netcdf ? "./output.nc" : "./output.parquet")
 
+        // The CLI parser rejects option values starting with "-". Accept "m" as a minus prefix
+        // (e.g. "m44,m10" = -44 ... -10) so southern/western hemisphere bounds can be passed.
         let latitudeBounds = signature.latitudeBounds.map {
-            let parts = $0.split(separator: ",")
+            let parts = $0.replacingOccurrences(of: "m", with: "-").split(separator: ",")
             return Float(parts[0])! ... Float(parts[1])!
         }
         let longitudeBounds = signature.longitudeBounds.map {
-            let parts = $0.split(separator: ",")
+            let parts = $0.replacingOccurrences(of: "m", with: "-").split(separator: ",")
             return Float(parts[0])! ... Float(parts[1])!
         }
 
