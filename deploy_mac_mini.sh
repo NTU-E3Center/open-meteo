@@ -51,29 +51,22 @@ REPO_DIR="$(pwd)"
 LOG_DIR="${HOME}/om-logs"
 mkdir -p "${LOG_DIR}"
 CRON_MARK="# apac-solar-pipeline"
-# Target times are defined in UTC (model publication schedule); cron interprets times in
-# the SYSTEM timezone, so convert UTC hours -> local hours at install time.
-FULL_HOURS=$(python3 -c "
-import datetime
-off = round(datetime.datetime.now().astimezone().utcoffset().total_seconds()/3600)
-print(','.join(str((h+off)%24) for h in (4,10,16,22)))")
-JMA_HOURS=$(python3 -c "
-import datetime
-off = round(datetime.datetime.now().astimezone().utcoffset().total_seconds()/3600)
-print(','.join(str((h+off)%24) for h in (1,7,13,19)))")
-# NOTE: cron env-var lines do NOT support trailing comments (the comment would become
-# part of the value and corrupt PATH) — so the PATH line carries no marker; dedup
-# matches it by the venv path instead.
+# Single hourly self-heal job is the WHOLE pipeline. `--heal` checks each model's current
+# run (from meta.json) and exports+uploads only the ones missing from HF, skipping those
+# already archived. This subsumes the old dedicated full/jma runs (which unconditionally
+# re-exported the same current runs and only fought this job for the lock). Each 6 h / 3 h
+# run gets 5-6 / 2-3 hourly checks before the next run supersedes it, so coverage is ample.
+# Runs every hour at :05 (no UTC->local conversion needed — it is hour-agnostic).
+# NOTE: cron env-var lines do NOT support trailing comments (would corrupt PATH) — so the
+# PATH line carries no marker; dedup matches it by the venv path instead.
 ( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" | grep -v "^PATH=.*om-venv" || true
   echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-  echo "30 ${FULL_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh >> ${LOG_DIR}/full.log 2>&1 ${CRON_MARK}"
-  echo "30 ${JMA_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh jma_msm >> ${LOG_DIR}/jma.log 2>&1 ${CRON_MARK}"
   echo "5 * * * * cd ${REPO_DIR} && ./run_solar_regions.sh --heal >> ${LOG_DIR}/heal.log 2>&1 ${CRON_MARK}"
 ) | crontab -
-echo "cron installed (UTC 04:30/10:30/16:30/22:30 full + 01:30/07:30/13:30/19:30 jma, converted to local tz):"
+echo "cron installed (hourly self-heal at :05 — single job, covers all models):"
 crontab -l | grep "${CRON_MARK}"
 
 echo
 echo "=== Deployment complete ==="
-echo "Logs:   ${LOG_DIR}/full.log, ${LOG_DIR}/jma.log"
+echo "Logs:   ${LOG_DIR}/heal.log"
 echo "Local retention: LOCAL_RETENTION_DAYS=2 (HF is the canonical archive)"
