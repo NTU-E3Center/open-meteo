@@ -50,14 +50,16 @@ LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-2}"
 #                          (Japan; southern Taiwan cut off). direct/diffuse via empirical separation model.
 #   ecmwf_ifs025         : ECMWF IFS, 25 km, 6-hourly runs, 15 days. DB is 3-HOURLY (exports 3 h rows).
 #                          Highest large-scale skill; radiation split via separation model.
-#   ecmwf_aifs025_single : ECMWF AIFS (AI model), 25 km, 15 days, DB 6-HOURLY (exports 6 h rows).
-#                          Diversity member for medium-range trends; smooth fields, coarse time.
+# DROPPED ecmwf_aifs025_single (2026-06-13): fully redundant with dynamical.org's
+# "ECMWF AIFS Single Forecast" Zarr archive (same 0.25°, 6-hourly, GHI, archived since
+# 2024-04 — deeper than ours). Our copy added only format convenience at a permanent
+# storage cost; pull AIFS from dynamical.org if ever needed. JMA/ICON-APAC have NO
+# equivalent there and stay. See git log / project memory.
 MODELS=(
   "dwd_icon              7"
   "ncep_gfs013           7"
   "jma_msm               3"
   "ecmwf_ifs025         15"
-  "ecmwf_aifs025_single 15"
 )
 
 # Regions: "name latBounds lonBounds" — 'm' prefix = minus (e.g. m44 = -44)
@@ -184,6 +186,13 @@ sys.exit(0 if HfApi().file_exists('${HF_DATASET_REPO}', '${HF_PATH}', repo_type=
 import sys, os, pandas as pd
 src, dst = sys.argv[1], sys.argv[2]
 df = pd.read_parquet(src)
+# Drop the "already-past" rows: export starts at 00:00 of START_DATE, so a run
+# initialised later (e.g. 21Z) carries up to 21 h of pre-run hours that are NOT this
+# run's forecast and are stored redundantly by every later run that day. Keep only
+# time >= run_init so each file is a clean lead>=0 forecast (~10-15% smaller, lossless
+# — the dropped hours belong to earlier runs' files).
+run_init = pd.to_datetime(os.environ['RUN_STAMP'], format='%Y%m%dT%HZ', utc=True).tz_localize(None)
+df = df[pd.to_datetime(df['time']) >= run_init]
 meta = {'location_id','latitude','longitude','elevation','time'}
 for c in df.columns:
     if c in meta:

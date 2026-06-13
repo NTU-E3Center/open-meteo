@@ -19,11 +19,10 @@ EXPECTED = {
     "ncep_gfs013":          [0, 6, 12, 18],
     "jma_msm":              [0, 3, 6, 9, 12, 15, 18, 21],
     "ecmwf_ifs025":         [0, 6, 12, 18],
-    "ecmwf_aifs025_single": [0, 6, 12, 18],
 }
 # Publication lag (hours) per model: a run isn't "missing" until init + lag has passed.
 LAG_H = {"dwd_icon": 5, "ncep_gfs013": 7, "jma_msm": 5,
-         "ecmwf_ifs025": 9, "ecmwf_aifs025_single": 7}
+         "ecmwf_ifs025": 9}
 
 def main(days: int) -> None:
     api = HfApi()
