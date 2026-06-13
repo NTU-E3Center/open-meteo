@@ -68,7 +68,7 @@ print(','.join(str((h+off)%24) for h in (1,7,13,19)))")
   echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
   echo "30 ${FULL_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh >> ${LOG_DIR}/full.log 2>&1 ${CRON_MARK}"
   echo "30 ${JMA_HOURS} * * * cd ${REPO_DIR} && ./run_solar_regions.sh jma_msm >> ${LOG_DIR}/jma.log 2>&1 ${CRON_MARK}"
-  echo "15 * * * * cd ${REPO_DIR} && ./run_solar_regions.sh --heal >> ${LOG_DIR}/heal.log 2>&1 ${CRON_MARK}"
+  echo "5 * * * * cd ${REPO_DIR} && ./run_solar_regions.sh --heal >> ${LOG_DIR}/heal.log 2>&1 ${CRON_MARK}"
 ) | crontab -
 echo "cron installed (UTC 04:30/10:30/16:30/22:30 full + 01:30/07:30/13:30/19:30 jma, converted to local tz):"
 crontab -l | grep "${CRON_MARK}"
