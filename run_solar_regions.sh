@@ -19,7 +19,15 @@ set -euo pipefail
 
 # Optional: pass a model name to run ONLY that model (e.g. `./run_solar_regions.sh jma_msm`
 # for the extra 3-hourly JMA refreshes). No argument = run all models.
+# `--heal`: self-heal mode — only export models whose CURRENT run is missing from HF
+# (retries failed/missed scrapes while the run is still in the rolling DB; near no-op
+# when the archive is complete). Intended to run hourly from cron.
 ONLY_MODEL="${1:-}"
+HEAL=""
+if [ "${ONLY_MODEL}" = "--heal" ]; then
+  HEAL=1
+  ONLY_MODEL=""
+fi
 
 # ---------------------------------------------------------------------------
 # Config — edit these
@@ -114,7 +122,21 @@ m = json.load(urllib.request.urlopen('https://openmeteo.s3.amazonaws.com/data/${
 print(datetime.datetime.fromtimestamp(m['last_run_initialisation_time'], datetime.UTC).strftime('%Y%m%dT%HZ'))
 " 2>/dev/null
   }
-  RUN_STAMP=$(fetch_run_stamp) || RUN_STAMP="${STAMP}"
+  if [ -n "${HEAL}" ]; then
+    # Self-heal: only act when the model's CURRENT run is absent from HF.
+    RUN_STAMP=$(fetch_run_stamp) || { echo "[$(date -u)] heal: ${DOMAIN} meta unavailable — skipping"; continue; }
+    HF_PATH="data/model=${DOMAIN}/year=${RUN_STAMP:0:4}/month=${RUN_STAMP:4:2}/${RUN_STAMP}.parquet"
+    if python3 -c "
+from huggingface_hub import HfApi
+import sys
+sys.exit(0 if HfApi().file_exists('${HF_DATASET_REPO}', '${HF_PATH}', repo_type='dataset') else 1)
+" 2>/dev/null; then
+      continue  # current run already archived
+    fi
+    echo "[$(date -u)] heal: ${DOMAIN} run ${RUN_STAMP} missing from HF — recovering"
+  else
+    RUN_STAMP=$(fetch_run_stamp) || RUN_STAMP="${STAMP}"
+  fi
   for region in "${REGIONS[@]}"; do
     read -r NAME LAT LON <<< "${region}"
     OUT_FILE="${NAME}_${DOMAIN}_${STAMP}.parquet"
