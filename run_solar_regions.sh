@@ -55,10 +55,18 @@ LOCAL_RETENTION_DAYS="${LOCAL_RETENTION_DAYS:-2}"
 # 2024-04 — deeper than ours). Our copy added only format convenience at a permanent
 # storage cost; pull AIFS from dynamical.org if ever needed. JMA/ICON-APAC have NO
 # equivalent there and stay. See git log / project memory.
+# ORDER MATTERS in --heal mode: list the shortest-interval model FIRST. jma_msm is
+# 3-hourly (its rolling run rotates every 3 h); the others are 6-hourly. Processing is
+# serial, so a slow 6-hourly recovery (icon/gfs/ifs exports take 30-40 min) running
+# before jma would push jma's missing-run check past a whole JMA rotation, silently
+# skipping the run that was current at cycle start. Putting jma first guarantees its
+# check + export happen at the very start of every cycle, before any slow recovery.
+# (Post-mortem: 2026-06-14 12Z JMA was lost exactly this way — gfs's 37 min recovery
+# delayed jma's check from 18:05 to 18:44, by which point 12Z had rotated to 15Z.)
 MODELS=(
+  "jma_msm               3"
   "dwd_icon              7"
   "ncep_gfs013           7"
-  "jma_msm               3"
   "ecmwf_ifs025         15"
 )
 
@@ -179,7 +187,9 @@ sys.exit(0 if HfApi().file_exists('${HF_DATASET_REPO}', '${HF_PATH}', repo_type=
       # start and end of this export, the file mixes two runs — warn (still uploaded).
       RUN_AFTER=$(fetch_run_stamp) || RUN_AFTER="${RUN_STAMP}"
       if [ "${RUN_AFTER}" != "${RUN_STAMP}" ]; then
-        echo "[$(date -u)]     WARN: run changed during export (${RUN_STAMP} -> ${RUN_AFTER}); file mixes both runs, labelled ${RUN_STAMP}"
+        echo "[$(date -u)]     WARN: run rotated mid-export (${RUN_STAMP} -> ${RUN_AFTER}); discarding to avoid a mislabelled mixed-run file — next cycle will capture ${RUN_AFTER} cleanly"
+        rm -f "${OUT_DIR}/${OUT_FILE}"
+        continue
       fi
       TMP_FILE="$(mktemp -d)/${OUT_FILE}"
       RUN_STAMP="${RUN_STAMP}" SCRAPED_AT="${STAMP}" python3 - "$OUT_DIR/$OUT_FILE" "$TMP_FILE" <<'PYEOF'
