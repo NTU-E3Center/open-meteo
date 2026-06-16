@@ -73,9 +73,15 @@ for c in val_cols:
     arr = df[c].astype(np_dtype).to_numpy()
     ds[c] = (("time", "location"), arr.reshape(nL, nT).T)
 
+# Chunking for random small-slice training access: block time (contiguous, the clean win)
+# and coarsely tile location. ~1-3 MB compressed per chunk keeps HTTP reads from HF efficient
+# while letting a dataloader fetch only the timesteps/tiles it samples (vs decompressing the
+# whole variable). Tunable via ZARR_TIME_CHUNK / ZARR_LOC_CHUNK.
+t_chunk = min(int(os.environ.get("ZARR_TIME_CHUNK", "24")), nT)
+l_chunk = min(int(os.environ.get("ZARR_LOC_CHUNK", "120000")), nL)
 comp = zarr.codecs.BloscCodec(cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.shuffle)
-enc = {v: {"compressors": (comp,), "chunks": (nT, nL)} for v in val_cols}
+enc = {v: {"compressors": (comp,), "chunks": (t_chunk, l_chunk)} for v in val_cols}
 # consolidated metadata = one metadata read when opening over HTTP from HF (much faster
 # for training-time access than fetching every array's metadata separately).
 ds.to_zarr(dst, mode="w", encoding=enc, zarr_format=3, consolidated=True)
-print(f"wrote {dst}: {nT} times x {nL} locations x {len(val_cols)} vars")
+print(f"wrote {dst}: {nT}x{nL} ({len(val_cols)} vars), chunks=({t_chunk},{l_chunk})")
