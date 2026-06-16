@@ -64,7 +64,7 @@ echo "  models=[${MODELS}]  $( [ -n "${SINCE}" ] && echo "since=${SINCE}" || ech
 # --- 1) Planner: which runs in data_run (window) are missing from HF? -------
 # Emits TSV: DOMAIN <TAB> RUN_ISO <TAB> START_DATE <TAB> END_DATE <TAB> RUN_STAMP <TAB> HF_ZARR_PATH
 PLAN="$("${PYBIN}" - "${S3_BASE}" "${HF_DATASET_REPO}" "${SINCE}" "${LOOKBACK_DAYS}" ${MODELS} <<'PY'
-import sys, urllib.request, urllib.parse, datetime, json
+import sys, os, urllib.request, urllib.parse, datetime, json
 import xml.etree.ElementTree as ET
 from huggingface_hub import HfApi
 
@@ -92,8 +92,11 @@ if SINCE:
     start = datetime.date.fromisoformat(SINCE)
 else:
     start = today - datetime.timedelta(days=LOOKBACK)
-# newest-first: during a multi-day backfill this lands fresh data first, then grinds history
-days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)][::-1]
+# ORDER=newest (default): land fresh data first. ORDER=oldest: grind history forward —
+# use on a 2nd machine so the two converge from opposite ends with no overlap (idempotent).
+days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)]
+if os.environ.get("ORDER", "newest") != "oldest":
+    days = days[::-1]
 
 # Generous per-model export window (>= each model max horizon, in days). The export only
 # downloads what the run actually contains; a wider window just fills the tail with NaN,
