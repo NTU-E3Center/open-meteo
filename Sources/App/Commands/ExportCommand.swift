@@ -181,6 +181,9 @@ struct ExportCommand: AsyncCommand {
         @Option(name: "concurrent-chunk-length", help: "Number of grid cells processed by each chunk in parallel")
         var concurrentChunksLength: Int?
 
+        @Option(name: "run", help: "Export a specific model run by init time (ISO, e.g. 2026-06-15T12:00). Reads the immutable per-run data_run archive instead of the rolling DB — gives a clean, init-addressable forecast that is never overwritten by later runs.")
+        var run: String?
+
         /// Get time range from parameters
         func getTime(dtSeconds: Int) throws -> TimerangeDt? {
             guard let startDate, let endDate else {
@@ -197,6 +200,8 @@ struct ExportCommand: AsyncCommand {
         let domain = try MultiDomains.load(rawValue: signature.domain)
         //let regriddingDomain = try TargetGridDomain.load(rawValueOptional: signature.regriddingDomain)
         let format = try ExportFormat.load(rawValueOptional: signature.format) ?? .netcdf
+        // Optional: pin the export to a specific model run from the immutable data_run archive.
+        let run = try signature.run.map { try IsoDateTime(fromIsoString: $0) }
         disableIdleSleep()
 
         let filePath = signature.outputFilename ?? (format == .netcdf ? "./output.nc" : "./output.parquet")
@@ -271,12 +276,13 @@ struct ExportCommand: AsyncCommand {
                 onlySeaAroundSearchRadius: signature.ignoreSea ? (signature.ignoreSeaSearchRadius ?? 0) : nil,
                 concurrent: signature.concurrent ?? 8,
                 concurrentChunksLength: signature.concurrentChunksLength ?? 100,
-                onlyFullBoundingBox: signature.onlyFullBoundingBox
+                onlyFullBoundingBox: signature.onlyFullBoundingBox,
+                run: run
             )
         }
     }
 
-    func generateParquet(application: Application, file: String, domain: MultiDomains, variables: [String], time: TimerangeDt, /*targetGridDomain: TargetGridDomain?,*/ normals: (years: [Int], width: Int)?, rainDayDistribution: DailyNormalsCalculator.RainDayDistribution?, latitudeBounds: ClosedRange<Float>?, longitudeBounds: ClosedRange<Float>?, onlySeaAroundSearchRadius: Int?, concurrent: Int, concurrentChunksLength: Int, onlyFullBoundingBox: Bool) async throws {
+    func generateParquet(application: Application, file: String, domain: MultiDomains, variables: [String], time: TimerangeDt, /*targetGridDomain: TargetGridDomain?,*/ normals: (years: [Int], width: Int)?, rainDayDistribution: DailyNormalsCalculator.RainDayDistribution?, latitudeBounds: ClosedRange<Float>?, longitudeBounds: ClosedRange<Float>?, onlySeaAroundSearchRadius: Int?, concurrent: Int, concurrentChunksLength: Int, onlyFullBoundingBox: Bool, run: IsoDateTime? = nil) async throws {
         #if ENABLE_PARQUET
         let logger = application.logger
         let client = application.http.client.shared
@@ -395,7 +401,7 @@ struct ExportCommand: AsyncCommand {
                         }
                         let rows = try await variables.asyncMap { variable in
                             let (v, previousDay) = variable.variableAndPreviousDay
-                            guard let data = try await reader.get(mixed: v.rawValue, time: time.toSettings(previousDay: previousDay)) else {
+                            guard let data = try await reader.get(mixed: v.rawValue, time: time.toSettings(previousDay: previousDay, run: run)) else {
                                 fatalError("Invalid variable \(variable)")
                             }
                             return DataAndUnit(normalsCalculator.calculateDailyNormals(variable: variable.rawValue, values: ArraySlice(data.data), time: time, rainDayDistribution: rainDayDistribution ?? .end).round(digits: data.unit.significantDigits), data.unit)
@@ -474,7 +480,7 @@ struct ExportCommand: AsyncCommand {
                     }
                     let rows = try await variables.asyncMap { variable in
                         let (v, previousDay) = variable.variableAndPreviousDay
-                        guard let data = try await reader.get(mixed: v.rawValue, time: time.toSettings(previousDay: previousDay)) else {
+                        guard let data = try await reader.get(mixed: v.rawValue, time: time.toSettings(previousDay: previousDay, run: run)) else {
                             fatalError("Invalid variable \(variable)")
                         }
                         return data
