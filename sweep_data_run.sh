@@ -99,7 +99,9 @@ days = [start + datetime.timedelta(days=i) for i in range((today - start).days +
 # downloads what the run actually contains; a wider window just fills the tail with NaN,
 # which parquet_to_zarr drops. So we skip a per-run meta fetch (slow over hundreds of runs)
 # and let the converter trim — the S3 download (the bottleneck) is unaffected.
-HORIZON = {"jma_msm": 4, "dwd_icon": 8, "ncep_gfs013": 17, "ecmwf_ifs025": 16}
+# gfs/ifs capped at 7 days: their 15-16 day tails have ~no skill for solar forecasting
+# and were the main backfill/storage cost. jma (3 d) and icon (7.5 d) keep full horizon.
+HORIZON = {"jma_msm": 4, "dwd_icon": 8, "ncep_gfs013": 7, "ecmwf_ifs025": 7}
 
 # Existing runs on HF: a run is present iff its <stamp>.parquet exists.
 api = HfApi()
