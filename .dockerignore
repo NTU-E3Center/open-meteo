@@ -1,2 +1,14 @@
 .build/
 .swiftpm/
+
+# Exclude everything not needed to compile the Swift binary. Critically `out/` holds
+# the multi-GB local parquet buffer — without this it lands in the build context and
+# fills the colima/docker VM disk during `COPY . .` ("no space left on device").
+out/
+.git/
+.venv*/
+*.ipynb
+*.log
+*.parquet
+.DS_Store
+docs/
