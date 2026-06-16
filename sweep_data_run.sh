@@ -92,9 +92,12 @@ if SINCE:
     start = datetime.date.fromisoformat(SINCE)
 else:
     start = today - datetime.timedelta(days=LOOKBACK)
-# ORDER=newest (default): land fresh data first. ORDER=oldest: grind history forward —
-# use on a 2nd machine so the two converge from opposite ends with no overlap (idempotent).
-days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)]
+# UNTIL bounds the END of the window (default = today). Set it to split work across machines
+# without overlap, e.g. mini does SINCE..UNTIL (old half), laptop does the new half.
+until = os.environ.get("UNTIL")
+end_day = datetime.date.fromisoformat(until) if until else today
+# ORDER=newest (default): land fresh data first. ORDER=oldest: grind history forward.
+days = [start + datetime.timedelta(days=i) for i in range((end_day - start).days + 1)]
 if os.environ.get("ORDER", "newest") != "oldest":
     days = days[::-1]
 
