@@ -110,9 +110,11 @@ for f in api.list_repo_files(REPO, repo_type="dataset"):
         model = f.split("model=")[1].split("/")[0] if "model=" in f else "?"
         have.add((model, stamp))
 
-for model in MODELS:
-    n = 0
-    for d in days:
+# date-major: newest day first, all models within each day -> recent all-model coverage
+# lands first, then grinds back through history (matches the newest-first freshness goal).
+counts = {m: 0 for m in MODELS}
+for d in days:
+    for model in MODELS:
         base = f"data_run/{model}/{d.year:04d}/{d.month:02d}/{d.day:02d}/"
         try:
             _, runprefixes = s3_list(base, delimiter="/")
@@ -129,8 +131,9 @@ for model in MODELS:
             end_date = (d + datetime.timedelta(days=HORIZON.get(model, 16))).isoformat()
             hf_path = f"data/model={model}/year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/{stamp}.parquet"
             print("\t".join([model, run_iso, start_date, end_date, stamp, hf_path]))
-            n += 1
-    print(f"[plan] {model}: {n} missing run(s)", file=sys.stderr)
+            counts[model] += 1
+for m in MODELS:
+    print(f"[plan] {m}: {counts[m]} missing run(s)", file=sys.stderr)
 PY
 )"
 
