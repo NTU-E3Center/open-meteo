@@ -87,7 +87,8 @@ if SINCE:
     start = datetime.date.fromisoformat(SINCE)
 else:
     start = today - datetime.timedelta(days=LOOKBACK)
-days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)]
+# newest-first: during a multi-day backfill this lands fresh data first, then grinds history
+days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)][::-1]
 
 # Existing zarr runs on HF: a run is present iff <stamp>.zarr/zarr.json exists.
 api = HfApi()
