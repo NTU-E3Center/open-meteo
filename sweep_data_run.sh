@@ -90,7 +90,7 @@ else:
 # newest-first: during a multi-day backfill this lands fresh data first, then grinds history
 days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)][::-1]
 
-# Generous per-model export window (>= each model's max horizon, in days). The export only
+# Generous per-model export window (>= each model max horizon, in days). The export only
 # downloads what the run actually contains; a wider window just fills the tail with NaN,
 # which parquet_to_zarr drops. So we skip a per-run meta fetch (slow over hundreds of runs)
 # and let the converter trim — the S3 download (the bottleneck) is unaffected.
