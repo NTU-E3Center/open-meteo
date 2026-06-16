@@ -25,9 +25,15 @@ df = pd.read_parquet(src)
 META = {"location_id", "latitude", "longitude", "elevation", "time"}
 val_cols = [c for c in df.columns if c not in META and c not in ("run_init", "scraped_at")]
 
-# Keep only rows belonging to this run: time >= run_init AND not an all-NaN padding row.
+# Keep only this run's forecast. The export pads the requested [start,end] window with
+# NaN for times beyond the run's horizon; flux/accumulated vars (radiation, precip) and
+# instantaneous vars pad at slightly different boundaries, producing partial-NaN rows.
+# Drop any TIME that contains a NaN (not individual rows) so the (time x location) grid
+# stays a full product and the integer-cast below never sees NA.
 df = df[pd.to_datetime(df["time"]) >= run_init]
-df = df.dropna(how="all", subset=val_cols)
+bad_times = df.loc[df[val_cols].isna().any(axis=1), "time"].unique()
+if len(bad_times):
+    df = df[~df["time"].isin(bad_times)]
 if df.empty:
     sys.exit(f"no in-run rows for {run_stamp}")
 
