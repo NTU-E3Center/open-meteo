@@ -75,5 +75,7 @@ for c in val_cols:
 
 comp = zarr.codecs.BloscCodec(cname="zstd", clevel=9, shuffle=zarr.codecs.BloscShuffle.shuffle)
 enc = {v: {"compressors": (comp,), "chunks": (nT, nL)} for v in val_cols}
-ds.to_zarr(dst, mode="w", encoding=enc, zarr_format=3, consolidated=False)
+# consolidated metadata = one metadata read when opening over HTTP from HF (much faster
+# for training-time access than fetching every array's metadata separately).
+ds.to_zarr(dst, mode="w", encoding=enc, zarr_format=3, consolidated=True)
 print(f"wrote {dst}: {nT} times x {nL} locations x {len(val_cols)} vars")
