@@ -25,7 +25,7 @@ echo "=== 2/6 Python deps + HF CLI (venv) ==="
 VENV="${HOME}/.om-venv"
 PYBIN="$(command -v python3.12 || command -v python3)"
 "${PYBIN}" -m venv "${VENV}"
-"${VENV}/bin/pip" install -q --upgrade pandas pyarrow "huggingface_hub[cli]"
+"${VENV}/bin/pip" install -q --upgrade pandas pyarrow xarray zarr numcodecs "huggingface_hub[cli]"
 export PATH="${VENV}/bin:${PATH}"
 command -v hf >/dev/null || { echo "ERROR: 'hf' CLI not found in venv."; exit 1; }
 echo "venv: ${VENV} ($(python3 --version))"
@@ -43,33 +43,34 @@ fi
 echo "=== 4/6 Build patched Docker image (~30-50 min first time) ==="
 docker build --pull -f Dockerfile.local -t open-meteo:bbox-fix .
 
-echo "=== 5/6 Smoke test: single-model small run (jma_msm, ~3-5 min) ==="
-./run_solar_regions.sh jma_msm
+echo "=== 5/6 Smoke test: planner dry-run (lists what the sweep would recover) ==="
+DRY_RUN=1 MODELS=jma_msm LOOKBACK_DAYS=1 ./sweep_data_run.sh
 
 echo "=== 6/6 Install cron schedule ==="
 REPO_DIR="$(pwd)"
 LOG_DIR="${HOME}/om-logs"
 mkdir -p "${LOG_DIR}"
 CRON_MARK="# apac-solar-pipeline"
-# Single self-heal job is the WHOLE pipeline. `--heal` checks each model's current run
-# (from meta.json) and exports+uploads only the ones missing from HF, skipping those
-# already archived. This subsumes the old dedicated full/jma runs (which unconditionally
-# re-exported the same current runs and only fought this job for the lock).
-# Runs every 20 min (:05,:25,:45). Cadence is set by the SHORTEST run interval: jma_msm
-# is 3-hourly, so an hourly check left a run current for as little as one tick — if that
-# tick landed in the publish gap, the run was missed (post-mortem: 2026-06-14 12Z JMA).
-# At 20 min, every 3 h JMA run gets ~9 checks while current; 6-hourly models get ~18.
-# Overlap is safe: a still-running cycle holds the LOCKDIR and the next tick SKIPs.
+# The WHOLE pipeline is one daily reconciliation sweep over the immutable data_run archive.
+# `sweep_data_run.sh` lists the runs that exist in data_run within the look-back window,
+# diffs them against HF, and exports+uploads (as per-run zarr) only the missing ones —
+# idempotent and order-independent. Because data_run is init-addressable and immutable
+# (~3-month retention), there is NO capture-window race: a run can be fetched hours or
+# days late and is guaranteed clean. Daily is enough (data is for model training); the
+# 7-day look-back absorbs publication lag and tolerates up to a week of downtime.
+# Runs once daily at 06:00 UTC. Overlap is safe: a still-running sweep holds the LOCKDIR.
+# For a one-time historical backfill: SINCE=YYYY-MM-DD ./sweep_data_run.sh
 # NOTE: cron env-var lines do NOT support trailing comments (would corrupt PATH) — so the
 # PATH line carries no marker; dedup matches it by the venv path instead.
 ( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" | grep -v "^PATH=.*om-venv" || true
   echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-  echo "5,25,45 * * * * cd ${REPO_DIR} && ./run_solar_regions.sh --heal >> ${LOG_DIR}/heal.log 2>&1 ${CRON_MARK}"
+  echo "0 6 * * * cd ${REPO_DIR} && ./sweep_data_run.sh >> ${LOG_DIR}/sweep.log 2>&1 ${CRON_MARK}"
 ) | crontab -
-echo "cron installed (self-heal every 20 min at :05,:25,:45 — single job, covers all models):"
+echo "cron installed (daily data_run reconciliation sweep at 06:00 UTC — covers all models):"
 crontab -l | grep "${CRON_MARK}"
 
 echo
 echo "=== Deployment complete ==="
-echo "Logs:   ${LOG_DIR}/heal.log"
-echo "Local retention: LOCAL_RETENTION_DAYS=2 (HF is the canonical archive)"
+echo "Logs:   ${LOG_DIR}/sweep.log"
+echo "Backfill history once: SINCE=YYYY-MM-DD ./sweep_data_run.sh"
+echo "HF is the canonical archive (per-run zarr under data/model=<m>/.../<run>.zarr)"
