@@ -132,6 +132,12 @@ fi
 N=$(printf '%s\n' "${PLAN}" | grep -c . || true)
 echo "[$(date -u)] ${N} run(s) missing — recovering from data_run"
 
+if [ -n "${DRY_RUN:-}" ]; then
+  echo "[$(date -u)] DRY_RUN: would recover the following (DOMAIN / RUN / horizon / hf_path):"
+  printf '%s\n' "${PLAN}" | awk -F'\t' '{printf "  %-14s %s  %s..%s  -> %s\n",$1,$5,$3,$4,$6}'
+  exit 0
+fi
+
 # --- 2) For each missing run: export --run (full horizon) -> zarr -> upload -
 printf '%s\n' "${PLAN}" | while IFS=$'\t' read -r DOMAIN RUN_ISO START_DATE END_DATE RUN_STAMP HF_PATH; do
   [ -z "${DOMAIN}" ] && continue
