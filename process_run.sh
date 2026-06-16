@@ -51,17 +51,17 @@ if [ "${EXPORT_OK}" != "true" ]; then
   rm -f "${OUT_DIR}/${OUT_FILE}"; exit 0
 fi
 
-ZARR_TMP="$(mktemp -d)/${RUN_STAMP}.zarr"
+CLEAN_TMP="$(mktemp -d)/${RUN_STAMP}.parquet"
 if ! RUN_STAMP="${RUN_STAMP}" SCRAPED_AT="$(date -u +%Y%m%dT%H%M%SZ)" \
-     "${PYBIN}" parquet_to_zarr.py "${OUT_DIR}/${OUT_FILE}" "${ZARR_TMP}"; then
-  echo "[$(date -u)]     ERROR: ${DOMAIN} ${RUN_STAMP} zarr conversion failed — skipping"
-  rm -rf "$(dirname "${ZARR_TMP}")" "${OUT_DIR}/${OUT_FILE}"; exit 0
+     "${PYBIN}" postprocess.py "${OUT_DIR}/${OUT_FILE}" "${CLEAN_TMP}"; then
+  echo "[$(date -u)]     ERROR: ${DOMAIN} ${RUN_STAMP} postprocess failed — skipping"
+  rm -rf "$(dirname "${CLEAN_TMP}")" "${OUT_DIR}/${OUT_FILE}"; exit 0
 fi
 
 echo "[$(date -u)]     uploading ${DOMAIN} ${RUN_STAMP} -> ${HF_PATH}"
-if hf upload "${HF_DATASET_REPO}" "${ZARR_TMP}" "${HF_PATH}" --repo-type dataset --quiet; then
+if hf upload "${HF_DATASET_REPO}" "${CLEAN_TMP}" "${HF_PATH}" --repo-type dataset --quiet; then
   echo "[$(date -u)]     OK ${DOMAIN} ${RUN_STAMP}"
 else
   echo "[$(date -u)]     WARN: HF upload failed for ${DOMAIN} ${RUN_STAMP} (next sweep retries)"
 fi
-rm -rf "$(dirname "${ZARR_TMP}")" "${OUT_DIR}/${OUT_FILE}"
+rm -rf "$(dirname "${CLEAN_TMP}")" "${OUT_DIR}/${OUT_FILE}"

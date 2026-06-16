@@ -25,7 +25,7 @@ echo "=== 2/6 Python deps + HF CLI (venv) ==="
 VENV="${HOME}/.om-venv"
 PYBIN="$(command -v python3.12 || command -v python3)"
 "${PYBIN}" -m venv "${VENV}"
-"${VENV}/bin/pip" install -q --upgrade pandas pyarrow xarray zarr numcodecs "huggingface_hub[cli]"
+"${VENV}/bin/pip" install -q --upgrade pandas pyarrow "huggingface_hub[cli]"
 export PATH="${VENV}/bin:${PATH}"
 command -v hf >/dev/null || { echo "ERROR: 'hf' CLI not found in venv."; exit 1; }
 echo "venv: ${VENV} ($(python3 --version))"
@@ -53,7 +53,7 @@ mkdir -p "${LOG_DIR}"
 CRON_MARK="# apac-solar-pipeline"
 # The WHOLE pipeline is one daily reconciliation sweep over the immutable data_run archive.
 # `sweep_data_run.sh` lists the runs that exist in data_run within the look-back window,
-# diffs them against HF, and exports+uploads (as per-run zarr) only the missing ones —
+# diffs them against HF, and exports+uploads (as per-run parquet) only the missing ones —
 # idempotent and order-independent. Because data_run is init-addressable and immutable
 # (~3-month retention), there is NO capture-window race: a run can be fetched hours or
 # days late and is guaranteed clean. Daily is enough (data is for model training); the
@@ -73,4 +73,4 @@ echo
 echo "=== Deployment complete ==="
 echo "Logs:   ${LOG_DIR}/sweep.log"
 echo "Backfill history once: SINCE=YYYY-MM-DD ./sweep_data_run.sh"
-echo "HF is the canonical archive (per-run zarr under data/model=<m>/.../<run>.zarr)"
+echo "HF is the canonical archive (per-run parquet under data/model=<m>/.../<run>.parquet)"
