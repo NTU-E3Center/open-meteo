@@ -26,7 +26,9 @@ IMAGE="open-meteo:bbox-fix"
 REMOTE_DATA="https://openmeteo.s3.amazonaws.com/data/"
 S3_BASE="https://openmeteo.s3.amazonaws.com"
 CACHE_VOLUME="open-meteo-cache"
-CACHE_SIZE="6GB"
+PARALLEL="${PARALLEL:-1}"               # concurrent runs; measured ~2.4x throughput at 3
+# parallel exports share the colima VM RAM, so shrink per-export cache to fit (3 x 2GB = 6GB)
+CACHE_SIZE="${CACHE_SIZE:-$([ "${PARALLEL}" -gt 1 ] && echo 2GB || echo 6GB)}"
 OUT_DIR="${OUT_DIR:-$(cd "$(dirname "$0")" && pwd)/out}"
 HF_DATASET_REPO="${HF_DATASET_REPO-JimTseng/apac-nwp-forecast-archive}"
 PYBIN="${PYBIN:-python3}"
@@ -37,6 +39,9 @@ REGION_NAME="apac"
 IGNORE_SEA="--ignore_sea"
 EXPORT_VARS="shortwave_radiation,direct_radiation,diffuse_radiation,direct_normal_irradiance,temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,precipitation,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high"
 CONCURRENT=8
+# export config so process_run.sh (spawned per run by xargs) inherits it
+export IMAGE REMOTE_DATA CACHE_VOLUME CACHE_SIZE OUT_DIR HF_DATASET_REPO PYBIN
+export REGION_LAT REGION_LON REGION_NAME IGNORE_SEA EXPORT_VARS CONCURRENT
 
 MODELS="${MODELS:-jma_msm dwd_icon ncep_gfs013 ecmwf_ifs025}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-7}"
@@ -142,49 +147,9 @@ if [ -n "${DRY_RUN:-}" ]; then
   exit 0
 fi
 
-# --- 2) For each missing run: export --run (full horizon) -> zarr -> upload -
-printf '%s\n' "${PLAN}" | while IFS=$'\t' read -r DOMAIN RUN_ISO START_DATE END_DATE RUN_STAMP HF_PATH; do
-  [ -z "${DOMAIN}" ] && continue
-  OUT_FILE="${REGION_NAME}_${DOMAIN}_${RUN_STAMP}.parquet"
-  echo "[$(date -u)] --- ${DOMAIN} run ${RUN_STAMP} (${RUN_ISO}) horizon ${START_DATE}..${END_DATE}"
-
-  EXPORT_OK=false
-  for attempt in 1 2; do
-    if docker run --rm \
-      -v "${CACHE_VOLUME}":/app/data -v "${OUT_DIR}":/out \
-      -e REMOTE_DATA_DIRECTORY="${REMOTE_DATA}" -e CACHE_SIZE="${CACHE_SIZE}" \
-      --entrypoint /app/openmeteo-api "${IMAGE}" \
-      export "${DOMAIN}" "${EXPORT_VARS}" \
-      --run "${RUN_ISO}" \
-      --start_date "${START_DATE}" --end_date "${END_DATE}" \
-      --latitude-bounds "${REGION_LAT}" --longitude-bounds "${REGION_LON}" \
-      ${IGNORE_SEA} --concurrent "${CONCURRENT}" \
-      --format parquet -o "/out/${OUT_FILE}"; then
-      EXPORT_OK=true; break
-    fi
-    echo "[$(date -u)]     WARN: ${DOMAIN} ${RUN_STAMP} export attempt ${attempt} failed"
-    [ "${attempt}" -lt 2 ] && sleep 60
-  done
-  if [ "${EXPORT_OK}" != "true" ]; then
-    echo "[$(date -u)]     ERROR: ${DOMAIN} ${RUN_STAMP} export failed twice — skipping (next sweep retries)"
-    rm -f "${OUT_DIR}/${OUT_FILE}"; continue
-  fi
-
-  # parquet -> per-run zarr (int-cast, provenance, drop out-of-run NaN rows)
-  ZARR_TMP="$(mktemp -d)/${RUN_STAMP}.zarr"
-  if ! RUN_STAMP="${RUN_STAMP}" SCRAPED_AT="$(date -u +%Y%m%dT%H%M%SZ)" \
-       "${PYBIN}" parquet_to_zarr.py "${OUT_DIR}/${OUT_FILE}" "${ZARR_TMP}"; then
-    echo "[$(date -u)]     ERROR: ${DOMAIN} ${RUN_STAMP} zarr conversion failed — skipping"
-    rm -rf "$(dirname "${ZARR_TMP}")" "${OUT_DIR}/${OUT_FILE}"; continue
-  fi
-
-  echo "[$(date -u)]     uploading ${DOMAIN} ${RUN_STAMP} -> hf://datasets/${HF_DATASET_REPO}/${HF_PATH}"
-  if hf upload "${HF_DATASET_REPO}" "${ZARR_TMP}" "${HF_PATH}" --repo-type dataset --quiet; then
-    echo "[$(date -u)]     OK ${DOMAIN} ${RUN_STAMP}"
-  else
-    echo "[$(date -u)]     WARN: HF upload failed for ${DOMAIN} ${RUN_STAMP} (next sweep retries)"
-  fi
-  rm -rf "$(dirname "${ZARR_TMP}")" "${OUT_DIR}/${OUT_FILE}"
-done
+# --- 2) Recover each missing run: export --run (full horizon) -> zarr -> upload.
+# PARALLEL runs at a time via xargs -P (macOS bash 3.2 has no `wait -n`). Each plan line's
+# whitespace-separated fields become process_run.sh's positional args $1..$6.
+printf '%s\n' "${PLAN}" | xargs -P "${PARALLEL}" -L 1 ./process_run.sh
 
 echo "[$(date -u)] sweep done"
