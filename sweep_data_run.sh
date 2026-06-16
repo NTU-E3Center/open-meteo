@@ -90,6 +90,12 @@ else:
 # newest-first: during a multi-day backfill this lands fresh data first, then grinds history
 days = [start + datetime.timedelta(days=i) for i in range((today - start).days + 1)][::-1]
 
+# Generous per-model export window (>= each model's max horizon, in days). The export only
+# downloads what the run actually contains; a wider window just fills the tail with NaN,
+# which parquet_to_zarr drops. So we skip a per-run meta fetch (slow over hundreds of runs)
+# and let the converter trim — the S3 download (the bottleneck) is unaffected.
+HORIZON = {"jma_msm": 4, "dwd_icon": 8, "ncep_gfs013": 17, "ecmwf_ifs025": 16}
+
 # Existing zarr runs on HF: a run is present iff <stamp>.zarr/zarr.json exists.
 api = HfApi()
 have = set()
@@ -100,6 +106,7 @@ for f in api.list_repo_files(REPO, repo_type="dataset"):
         have.add((model, stamp))
 
 for model in MODELS:
+    n = 0
     for d in days:
         base = f"data_run/{model}/{d.year:04d}/{d.month:02d}/{d.day:02d}/"
         try:
@@ -112,17 +119,13 @@ for model in MODELS:
             stamp = f"{d.year:04d}{d.month:02d}{d.day:02d}T{hh}Z"
             if (model, stamp) in have:
                 continue
-            # fetch the run meta for the exact horizon end (full horizon, no NaN tail guesswork)
-            try:
-                meta = json.load(urllib.request.urlopen(f"{S3_BASE}/{rp}meta.json", timeout=30))
-                vt = meta["valid_times"]
-            except Exception:
-                continue
             run_iso = f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{hh}:00"
             start_date = f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
-            end_date = vt[-1][:10]
+            end_date = (d + datetime.timedelta(days=HORIZON.get(model, 16))).isoformat()
             hf_path = f"data/model={model}/year={d.year:04d}/month={d.month:02d}/{stamp}.zarr"
             print("\t".join([model, run_iso, start_date, end_date, stamp, hf_path]))
+            n += 1
+    print(f"[plan] {model}: {n} missing run(s)", file=sys.stderr)
 PY
 )"
 
