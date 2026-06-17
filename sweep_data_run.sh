@@ -36,7 +36,9 @@ PYBIN="${PYBIN:-python3}"
 REGION_LAT="m44,46"
 REGION_LON="92,154"
 REGION_NAME="apac"
-IGNORE_SEA="--ignore_sea"
+# Ocean INCLUDED: no --ignore_sea. (For jma_msm this is a no-op — its sea cells have
+# elevation 0, not NaN, so they were always kept; for dwd_icon it really keeps the sea.)
+IGNORE_SEA=""
 EXPORT_VARS="shortwave_radiation,direct_radiation,diffuse_radiation,direct_normal_irradiance,temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,precipitation,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high"
 CONCURRENT=8
 # export config so process_run.sh (spawned per run by xargs) inherits it
@@ -109,12 +111,13 @@ if os.environ.get("ORDER", "newest") != "oldest":
 # and were the main backfill/storage cost. jma (3 d) and icon (7.5 d) keep full horizon.
 HORIZON = {"jma_msm": 4, "dwd_icon": 8, "ncep_gfs013": 7, "ecmwf_ifs025": 7}
 
-# Existing runs on HF: a run is present iff its <stamp>.parquet exists.
+# Existing runs on HF: a run is present iff its <stamp>.zarr.zip exists (the archive
+# format is now the per-run ocean zarr cube under data_zarr/, not parquet under data/).
 api = HfApi()
 have = set()
 for f in api.list_repo_files(REPO, repo_type="dataset"):
-    if f.endswith(".parquet"):
-        stamp = f.rsplit("/", 1)[-1].removesuffix(".parquet")
+    if f.endswith(".zarr.zip"):
+        stamp = f.rsplit("/", 1)[-1].removesuffix(".zarr.zip")
         model = f.split("model=")[1].split("/")[0] if "model=" in f else "?"
         have.add((model, stamp))
 
@@ -137,7 +140,7 @@ for d in days:
             run_iso = f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{hh}:00"
             start_date = f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
             end_date = (d + datetime.timedelta(days=HORIZON.get(model, 16))).isoformat()
-            hf_path = f"data/model={model}/year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/{stamp}.parquet"
+            hf_path = f"data_zarr/model={model}/year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/{stamp}.zarr.zip"
             print("\t".join([model, run_iso, start_date, end_date, stamp, hf_path]))
             counts[model] += 1
 for m in MODELS:

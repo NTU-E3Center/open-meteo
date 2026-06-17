@@ -51,17 +51,37 @@ if [ "${EXPORT_OK}" != "true" ]; then
   rm -f "${OUT_DIR}/${OUT_FILE}"; exit 0
 fi
 
-CLEAN_TMP="$(mktemp -d)/${RUN_STAMP}.parquet"
+WORK="$(mktemp -d)"
+CLEAN_TMP="${WORK}/${RUN_STAMP}.parquet"
 if ! RUN_STAMP="${RUN_STAMP}" SCRAPED_AT="$(date -u +%Y%m%dT%H%M%SZ)" \
      "${PYBIN}" postprocess.py "${OUT_DIR}/${OUT_FILE}" "${CLEAN_TMP}"; then
   echo "[$(date -u)]     ERROR: ${DOMAIN} ${RUN_STAMP} postprocess failed — skipping"
-  rm -rf "$(dirname "${CLEAN_TMP}")" "${OUT_DIR}/${OUT_FILE}"; exit 0
+  rm -rf "${WORK}" "${OUT_DIR}/${OUT_FILE}"; exit 0
 fi
 
+# Convert the clean parquet -> per-run 4D zarr cube, packaged as one <stamp>.zarr.zip
+# (the archive format: map-first chunks, lead_chunk=12, ocean included). Single-file
+# upload avoids the many-small-file HTTP/2 reset, same as the JMA/icon batch tooling.
+ZDIR="${WORK}/${RUN_STAMP}.zarr"
+ZIP="${WORK}/${RUN_STAMP}.zarr.zip"
+if ! "${PYBIN}" parquet_to_zarr_cube.py "${CLEAN_TMP}" "${ZDIR}" 12; then
+  echo "[$(date -u)]     ERROR: ${DOMAIN} ${RUN_STAMP} zarr convert failed — skipping"
+  rm -rf "${WORK}" "${OUT_DIR}/${OUT_FILE}"; exit 0
+fi
+"${PYBIN}" - "${ZDIR}" "${ZIP}" <<'PY'
+import sys, os, zipfile
+src, zp = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(zp, "w", compression=zipfile.ZIP_STORED) as zf:
+    for r, _, fs in os.walk(src):
+        for f in fs:
+            full = os.path.join(r, f)
+            zf.write(full, os.path.relpath(full, src))
+PY
+
 echo "[$(date -u)]     uploading ${DOMAIN} ${RUN_STAMP} -> ${HF_PATH}"
-if hf upload "${HF_DATASET_REPO}" "${CLEAN_TMP}" "${HF_PATH}" --repo-type dataset --quiet; then
+if hf upload "${HF_DATASET_REPO}" "${ZIP}" "${HF_PATH}" --repo-type dataset --quiet; then
   echo "[$(date -u)]     OK ${DOMAIN} ${RUN_STAMP}"
 else
   echo "[$(date -u)]     WARN: HF upload failed for ${DOMAIN} ${RUN_STAMP} (next sweep retries)"
 fi
-rm -rf "$(dirname "${CLEAN_TMP}")" "${OUT_DIR}/${OUT_FILE}"
+rm -rf "${WORK}" "${OUT_DIR}/${OUT_FILE}"

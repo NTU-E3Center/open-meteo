@@ -25,7 +25,10 @@ echo "=== 2/6 Python deps + HF CLI (venv) ==="
 VENV="${HOME}/.om-venv"
 PYBIN="$(command -v python3.12 || command -v python3)"
 "${PYBIN}" -m venv "${VENV}"
-"${VENV}/bin/pip" install -q --upgrade pandas pyarrow "huggingface_hub[cli]"
+# xarray+zarr+numcodecs are needed by parquet_to_zarr_cube.py (process_run.sh converts
+# each run to a per-run zarr cube before upload). zarr>=3 for the v3 BloscCodec path.
+"${VENV}/bin/pip" install -q --upgrade pandas pyarrow "huggingface_hub[cli]" \
+  xarray "zarr>=3" numcodecs
 export PATH="${VENV}/bin:${PATH}"
 command -v hf >/dev/null || { echo "ERROR: 'hf' CLI not found in venv."; exit 1; }
 echo "venv: ${VENV} ($(python3 --version))"
@@ -64,13 +67,13 @@ CRON_MARK="# apac-solar-pipeline"
 # PATH line carries no marker; dedup matches it by the venv path instead.
 ( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" | grep -v "^PATH=.*om-venv" || true
   echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-  echo "0 6 * * * cd ${REPO_DIR} && MODELS=\"jma_msm dwd_icon\" ./sweep_data_run.sh >> ${LOG_DIR}/sweep.log 2>&1 ${CRON_MARK}"
+  echo "0 6 * * * cd ${REPO_DIR} && MODELS=\"jma_msm\" ./sweep_data_run.sh >> ${LOG_DIR}/sweep.log 2>&1 ${CRON_MARK}"
 ) | crontab -
-echo "cron installed (daily data_run reconciliation sweep at 06:00 UTC — covers all models):"
+echo "cron installed (daily data_run reconciliation sweep at 06:00 UTC — JMA only for now):"
 crontab -l | grep "${CRON_MARK}"
 
 echo
 echo "=== Deployment complete ==="
 echo "Logs:   ${LOG_DIR}/sweep.log"
 echo "Backfill history once: SINCE=YYYY-MM-DD ./sweep_data_run.sh"
-echo "HF is the canonical archive (per-run parquet under data/model=<m>/.../<run>.parquet)"
+echo "HF is the canonical archive (per-run ocean zarr.zip under data_zarr/model=<m>/.../<run>.zarr.zip)"
