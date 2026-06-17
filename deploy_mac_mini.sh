@@ -64,7 +64,7 @@ CRON_MARK="# apac-solar-pipeline"
 # PATH line carries no marker; dedup matches it by the venv path instead.
 ( crontab -l 2>/dev/null | grep -v "${CRON_MARK}" | grep -v "^PATH=.*om-venv" || true
   echo "PATH=${VENV}/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
-  echo "0 6 * * * cd ${REPO_DIR} && ./sweep_data_run.sh >> ${LOG_DIR}/sweep.log 2>&1 ${CRON_MARK}"
+  echo "0 6 * * * cd ${REPO_DIR} && MODELS=\"jma_msm dwd_icon\" ./sweep_data_run.sh >> ${LOG_DIR}/sweep.log 2>&1 ${CRON_MARK}"
 ) | crontab -
 echo "cron installed (daily data_run reconciliation sweep at 06:00 UTC — covers all models):"
 crontab -l | grep "${CRON_MARK}"
