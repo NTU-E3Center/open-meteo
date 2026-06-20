@@ -195,33 +195,40 @@ def main():
         log(f"  ... ({len(todo)} total)")
         return
 
-    # ---- Phase 1: export+convert missing runs, upload in batched commits -------
-    converted = 0
-    for bi, group in enumerate(chunks(todo, a.add_batch)):
-        workdir = tempfile.mkdtemp(prefix="iconzarr_")
-        ops, made = [], []
-        def build(item):
-            stamp, run_iso, start, end = item
+    # ---- Phase 1: export+convert+upload each missing run INDIVIDUALLY ----------
+    # Per-run single-file upload (api.upload_file), NOT a batched create_commit. The
+    # multi-file batched commit can wedge SILENTLY with no timeout (observed: a 3-zip
+    # ~1.5 GB commit hung 75 min at 0% CPU, no network) — and the retry wrapper can't
+    # see a hang that throws no exception. Single-file uploads are stable; at ~20 min/run
+    # build pace, per-run commits land minutes apart so there is no 429 pressure. Each
+    # run uploads the instant it is built, so a crash loses at most one in-flight run.
+    done = [0]
+    def build(item):
+        stamp, run_iso, start, end = item
+        wd = tempfile.mkdtemp(prefix="iconzarr_")
+        try:
             t0 = time.time()
-            zpath = export_convert_zip(stamp, run_iso, start, end, workdir,
+            zpath = export_convert_zip(stamp, run_iso, start, end, wd,
                                        a.lead_chunk, a.cache_size)
             sub = f"model={MODEL}/year={stamp[:4]}/month={stamp[4:6]}/day={stamp[6:8]}"
             zip_repo = f"data_zarr/{sub}/{stamp}.zarr.zip"
-            log(f"      built {stamp}  ({time.time()-t0:.0f}s, "
-                f"{os.path.getsize(zpath)/1e6:.0f} MB)")
-            return CommitOperationAdd(path_in_repo=zip_repo, path_or_fileobj=zpath), stamp
-        with ThreadPoolExecutor(max_workers=a.workers) as ex:
-            for r in ex.map(lambda it: _safe(build, it), group):
-                if r:
-                    ops.append(r[0]); made.append(r[1])
-        if ops:
-            retry(lambda: api.create_commit(
-                repo_id=REPO, repo_type="dataset", operations=ops,
-                commit_message=f"Add {len(ops)} dwd_icon (ocean) zarr.zip (batch {bi+1})"),
-                f"commit add-batch {bi+1}")
-            converted += len(ops)
-            log(f"[icon] add-commit {bi+1}: +{len(ops)} zip  (total {converted}/{len(todo)})")
-        shutil.rmtree(workdir, ignore_errors=True)
+            mb = os.path.getsize(zpath) / 1e6
+            retry(lambda: api.upload_file(
+                path_or_fileobj=zpath, path_in_repo=zip_repo,
+                repo_id=REPO, repo_type="dataset",
+                commit_message=f"Add {MODEL} {stamp} ocean zarr cube"),
+                f"{stamp} upload")
+            with _lock:
+                done[0] += 1; n = done[0]
+            log(f"[icon] OK {stamp}  ({time.time()-t0:.0f}s build, {mb:.0f} MB)  ({n}/{len(todo)})")
+            return stamp
+        finally:
+            shutil.rmtree(wd, ignore_errors=True)
+    with ThreadPoolExecutor(max_workers=a.workers) as ex:
+        for _ in ex.map(lambda it: _safe(build, it), todo):
+            pass
+    converted = done[0]
+    log(f"[icon] phase 1 done: uploaded {converted}/{len(todo)}")
 
     # ---- Phase 2: cutover — delete land-only parquets that now have a zip ------
     if a.keep_parquet:

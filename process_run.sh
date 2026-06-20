@@ -79,7 +79,8 @@ with zipfile.ZipFile(zp, "w", compression=zipfile.ZIP_STORED) as zf:
 PY
 
 echo "[$(date -u)]     uploading ${DOMAIN} ${RUN_STAMP} -> ${HF_PATH}"
-if hf upload "${HF_DATASET_REPO}" "${ZIP}" "${HF_PATH}" --repo-type dataset --quiet; then
+if hf upload "${HF_DATASET_REPO}" "${ZIP}" "${HF_PATH}" --repo-type dataset --quiet \
+     --commit-message "Add ${DOMAIN} ${RUN_STAMP} ocean zarr cube"; then
   echo "[$(date -u)]     OK ${DOMAIN} ${RUN_STAMP}"
 else
   echo "[$(date -u)]     WARN: HF upload failed for ${DOMAIN} ${RUN_STAMP} (next sweep retries)"
