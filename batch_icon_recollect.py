@@ -216,7 +216,7 @@ def main():
             retry(lambda: api.upload_file(
                 path_or_fileobj=zpath, path_in_repo=zip_repo,
                 repo_id=REPO, repo_type="dataset",
-                commit_message=f"Add {MODEL} {stamp} ocean zarr cube"),
+                commit_message=f"Add {MODEL} {stamp} zarr cube"),
                 f"{stamp} upload")
             with _lock:
                 done[0] += 1; n = done[0]
