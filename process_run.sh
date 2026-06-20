@@ -28,6 +28,12 @@ REGION_NAME="${REGION_NAME:-apac}"
 # icon; jma is immune because its --ignore_sea is a no-op). Only an UNSET var defaults.
 IGNORE_SEA="${IGNORE_SEA---ignore_sea}"
 EXPORT_VARS="${EXPORT_VARS:-shortwave_radiation,direct_radiation,diffuse_radiation,direct_normal_irradiance,temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,precipitation,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high}"
+# Per-model extra vars: dwd_icon's S3 source has snow (the paper's 3rd-most-important
+# SSR-bias factor, ~free in storage); jma_msm's source has NO snow, so requesting it for
+# jma would fail — only append snow for icon. Keeps the archive's two models at 15 / 13 vars.
+if [ "${DOMAIN}" = "dwd_icon" ]; then
+  EXPORT_VARS="${EXPORT_VARS},snow_depth,snowfall_water_equivalent"
+fi
 CONCURRENT="${CONCURRENT:-8}"
 
 OUT_FILE="${REGION_NAME}_${DOMAIN}_${RUN_STAMP}.parquet"

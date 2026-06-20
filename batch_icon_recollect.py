@@ -38,9 +38,13 @@ REMOTE_DATA = "https://openmeteo.s3.amazonaws.com/data/"
 CACHE_VOLUME = "open-meteo-cache"
 REGION_LAT, REGION_LON = "m44,46", "92,154"
 HORIZON_DAYS = 8                                        # dwd_icon native 7.5-day horizon
+# 15 vars: the 13 solar vars + snow_depth/snowfall (icon-only; ~free in storage, but the
+# paper's 3rd-most-important bias factor). snow is requested for icon because its S3 source
+# has it; jma_msm has no snow on S3 so the daily cron must NOT request it for jma.
 VARS = ("shortwave_radiation,direct_radiation,diffuse_radiation,direct_normal_irradiance,"
         "temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,precipitation,"
-        "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high")
+        "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,"
+        "snow_depth,snowfall_water_equivalent")
 
 api = HfApi()
 _lock = threading.Lock()
@@ -176,6 +180,9 @@ def main():
     ap.add_argument("--until", default="")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--keep-parquet", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="re-collect ALL runs, overwriting existing .zarr.zip "
+                         "(needed when the variable set changed, e.g. adding snow)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -184,7 +191,7 @@ def main():
 
     avail = s3_runs(since, until)
     zip_have, pq_have = hf_state()
-    todo = [r for r in avail if r[0] not in zip_have]
+    todo = list(avail) if a.force else [r for r in avail if r[0] not in zip_have]
     if a.limit:
         todo = todo[-a.limit:]                          # newest-first slice for testing
     log(f"[icon] s3_available={len(avail)}  have_zip={len(zip_have)}  "
@@ -211,7 +218,7 @@ def main():
             zpath = export_convert_zip(stamp, run_iso, start, end, wd,
                                        a.lead_chunk, a.cache_size)
             sub = f"model={MODEL}/year={stamp[:4]}/month={stamp[4:6]}/day={stamp[6:8]}"
-            zip_repo = f"data_zarr/{sub}/{stamp}.zarr.zip"
+            zip_repo = f"data/{sub}/{stamp}.zarr.zip"
             mb = os.path.getsize(zpath) / 1e6
             retry(lambda: api.upload_file(
                 path_or_fileobj=zpath, path_in_repo=zip_repo,
