@@ -140,7 +140,7 @@ for d in days:
             run_iso = f"{d.year:04d}-{d.month:02d}-{d.day:02d}T{hh}:00"
             start_date = f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
             end_date = (d + datetime.timedelta(days=HORIZON.get(model, 16))).isoformat()
-            hf_path = f"data_zarr/model={model}/year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/{stamp}.zarr.zip"
+            hf_path = f"data/model={model}/year={d.year:04d}/month={d.month:02d}/day={d.day:02d}/{stamp}.zarr.zip"
             print("\t".join([model, run_iso, start_date, end_date, stamp, hf_path]))
             counts[model] += 1
 for m in MODELS:
