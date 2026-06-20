@@ -22,7 +22,11 @@ PYBIN="${PYBIN:-python3}"
 REGION_LAT="${REGION_LAT:-m44,46}"
 REGION_LON="${REGION_LON:-92,154}"
 REGION_NAME="${REGION_NAME:-apac}"
-IGNORE_SEA="${IGNORE_SEA:---ignore_sea}"
+# NOTE: `-` not `:-` — an EXPLICIT empty IGNORE_SEA="" (set by sweep_data_run.sh to keep
+# ocean) must be respected. `:-` would treat empty as unset and wrongly re-add --ignore_sea,
+# silently producing land-only data (which then fails the dense-grid zarr conversion for
+# icon; jma is immune because its --ignore_sea is a no-op). Only an UNSET var defaults.
+IGNORE_SEA="${IGNORE_SEA---ignore_sea}"
 EXPORT_VARS="${EXPORT_VARS:-shortwave_radiation,direct_radiation,diffuse_radiation,direct_normal_irradiance,temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,precipitation,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high}"
 CONCURRENT="${CONCURRENT:-8}"
 
