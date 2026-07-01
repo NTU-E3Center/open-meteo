@@ -15,9 +15,12 @@ Per-run stores stack into the single 4D cube at read time:
     xr.open_mfdataset("…/*.zarr", engine="zarr", concat_dim="run_init",
                       combine="nested", join="outer")   # join pads short-horizon runs
 
-Usage: parquet_to_zarr_cube.py <in.parquet> <out.zarr> [LEAD_CHUNK=12]
+Usage: MODEL=dwd_icon parquet_to_zarr_cube.py <in.parquet> <out.zarr> [LEAD_CHUNK=12]
 """
+import os
+import re
 import sys
+
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -71,9 +74,15 @@ ds = xr.Dataset(
 )
 ds["lead"].attrs["units"] = "h"
 ds["lead"].attrs["long_name"] = "forecast lead time in hours after run_init"
-ds.attrs.update(model=df.get("model", pd.Series(["jma_msm"])).iloc[0]
-                if "model" in df else "jma_msm",
-                run_init=str(run_init), grid=f"{nlat}x{nlon}")
+# model: prefer explicit MODEL env, else parse the Hive path (model=…), else a parquet column.
+# (Previously this hard-coded "jma_msm" as the fallback, which silently mislabelled EVERY
+#  dwd_icon cube as jma_msm. No silent fallback now -- fail loudly if the model is unknown.)
+_m = re.search(r"model=([A-Za-z0-9_]+)", src + "|" + dst)
+model = (os.environ.get("MODEL") or (_m.group(1) if _m else None)
+         or (str(df["model"].iloc[0]) if "model" in df.columns else None))
+if not model:
+    sys.exit("parquet_to_zarr_cube.py: model unknown -- set MODEL=<domain> (e.g. dwd_icon)")
+ds.attrs.update(model=model, run_init=str(run_init), grid=f"{nlat}x{nlon}")
 
 # map-first chunks + blosc zstd(+shuffle); bit-shuffle helps the uint maps a lot.
 compressor = BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")

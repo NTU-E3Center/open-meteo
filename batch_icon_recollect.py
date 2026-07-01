@@ -163,7 +163,8 @@ def export_convert_zip(stamp, run_iso, start, end, workdir, lead_chunk, cache_si
     zdir = os.path.join(workdir, f"{stamp}.zarr")
     zpath = os.path.join(workdir, f"{stamp}.zarr.zip")
     subprocess.run([sys.executable, os.path.join(HERE, "parquet_to_zarr_cube.py"),
-                    clean, zdir, str(lead_chunk)], check=True, stderr=subprocess.DEVNULL)
+                    clean, zdir, str(lead_chunk)], check=True, stderr=subprocess.DEVNULL,
+                   env={**os.environ, "MODEL": MODEL})
     os.remove(clean)
     zip_store(zdir, zpath)
     shutil.rmtree(zdir, ignore_errors=True)

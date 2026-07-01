@@ -1,0 +1,9 @@
+# zarr_pipeline venv — one env for the whole go-forward pipeline.
+# Build:  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+xarray>=2025.1
+zarr>=3.0
+numpy>=1.26
+pandas>=2.0
+pyarrow>=15
+dask>=2024.1
+huggingface_hub>=1.19    # < 1.19 has an LFS pre-upload bug (HTTP/2 stream reset)
