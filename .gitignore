@@ -19,3 +19,7 @@ out/
 export_test/
 .ipynb_checkpoints/
 *.gif
+# Regenerable junk (logs, python cache)
+*.log
+__pycache__/
+*.pyc
