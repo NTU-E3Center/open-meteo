@@ -289,6 +289,9 @@ def _open_rish_segment(path):
                         lat_l = eccodes.codes_get(h, "latitudeOfLastGridPointInDegrees")
                         lon_f = eccodes.codes_get(h, "longitudeOfFirstGridPointInDegrees")
                         lon_l = eccodes.codes_get(h, "longitudeOfLastGridPointInDegrees")
+                        if int(eccodes.codes_get(h, "jScansPositively")) != 0:
+                            raise ValueError("RISH GRIB jScansPositively!=0 (south-to-north scan); "
+                                           "lat flip logic assumes north-to-south rows")
                         lat_arr = np.linspace(lat_f, lat_l, ny_g, dtype="float32")
                         lon_arr = np.linspace(lon_f, lon_l, nx_g, dtype="float32")
 
