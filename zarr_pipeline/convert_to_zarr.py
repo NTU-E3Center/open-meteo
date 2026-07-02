@@ -95,6 +95,22 @@ PARQUET_META_COLS = {
 
 _ZIP_RE = re.compile(r"(\d{8}T\d{2})Z\.zarr\.zip$")
 _PARQUET_RE = re.compile(r"(\d{8}T\d{2})Z\.parquet$")
+_RISH_RE = re.compile(r"Z__C_RJTD_(\d{14})_MSM_GPV_Rjp_Lsurf_FH00-15_grib2\.bin$")
+_RISH_SEGMENTS = ("00-15", "16-33", "34-39", "40-51", "52-78")
+
+# RISH GRIB (cfgrib names / JMA local params) -> cube variable names. All cube data vars
+# are float32 (verified on jma_msm_silver.zarr 2026-07-02); units converted here.
+# Total cloud cover arrives as an 'unknown' JMA local parameter; it is identified
+# positionally as the unknown var in the instantaneous cloud sub-dataset and renamed.
+_RISH_MAP = {
+    "avg_sdswrf": "shortwave_radiation_wattPerSquareMetre",  # W/m2 time-mean (hour-ending)
+    "t": "temperature_2m_celsius",                            # K -> degC
+    "r": "relative_humidity_2m_percentage",
+    "lcc": "cloud_cover_low_percentage",
+    "mcc": "cloud_cover_mid_percentage",
+    "hcc": "cloud_cover_high_percentage",
+    "sp": "surface_pressure_hectopascal",                     # Pa -> hPa
+}
 
 
 def fill_for(dtype):
@@ -113,20 +129,26 @@ def detect_source(data_dir):
         return "parquet"
     if glob.glob(os.path.join(data_dir, "*.zarr.zip")):
         return "zarrzip"
+    if glob.glob(os.path.join(data_dir, "Z__C_RJTD_*_FH00-15_grib2.bin")):
+        return "rish"
     raise SystemExit(f"no *.parquet or *.zarr.zip files in {data_dir}")
 
 
 def discover_runs(data_dir, source):
     """Return [(run_init: datetime64, path)] sorted by run_init."""
-    pat, rx = (("*.parquet", _PARQUET_RE) if source == "parquet"
-               else ("*.zarr.zip", _ZIP_RE))
+    pat, rx = {"parquet": ("*.parquet", _PARQUET_RE),
+               "zarrzip": ("*.zarr.zip", _ZIP_RE),
+               "rish": ("Z__C_RJTD_*_FH00-15_grib2.bin", _RISH_RE)}[source]
     out = []
     for f in sorted(glob.glob(os.path.join(data_dir, pat))):
         m = rx.search(os.path.basename(f))
         if not m:
             continue
         g = m.group(1)
-        ts = np.datetime64(f"{g[:4]}-{g[4:6]}-{g[6:8]}T{g[9:11]}:00:00")
+        if len(g) == 14:                                      # rish: YYYYMMDDHHMMSS
+            ts = np.datetime64(f"{g[:4]}-{g[4:6]}-{g[6:8]}T{g[8:10]}:{g[10:12]}:00")
+        else:                                                 # YYYYMMDDTHH
+            ts = np.datetime64(f"{g[:4]}-{g[4:6]}-{g[6:8]}T{g[9:11]}:00:00")
         out.append((ts, f))
     out.sort(key=lambda x: x[0])
     if not out:
@@ -205,7 +227,86 @@ def read_run_parquet(path):
     return ds
 
 
-READERS = {"parquet": read_run_parquet, "zarrzip": read_run_zarrzip}
+def rish_segment_paths(anchor: str) -> list[str]:
+    """Anchor = the FH00-15 file; siblings derived by segment substitution."""
+    return [anchor.replace("_FH00-15_", f"_FH{seg}_") for seg in _RISH_SEGMENTS]
+
+
+def _open_rish_segment(path):
+    """Seam for tests: cfgrib sub-datasets of one RISH segment file."""
+    import cfgrib
+    return cfgrib.open_datasets(path, backend_kwargs={"indexpath": ""})
+
+
+def read_run_rish(anchor: str) -> xr.Dataset:
+    """RISH MSM surface GRIB2 (5 segments, missing extensions tolerated) -> reader-contract
+    dataset: (lead, latitude, longitude), lead 1..hi contiguous (per-var NaN where absent),
+    float32 cube-named vars, lat ascending cropped to <= 46.0 (silver grid north bound)."""
+    per_var: dict[str, list[xr.DataArray]] = {}
+    for seg_path in rish_segment_paths(anchor):
+        if not os.path.exists(seg_path):
+            continue
+        for sub in _open_rish_segment(seg_path):
+            step = np.asarray(sub["step"].values)
+            if np.issubdtype(step.dtype, np.timedelta64):     # real cfgrib gives timedelta
+                step = (step / np.timedelta64(1, "h")).astype(int)
+            names = set(sub.data_vars)
+            rename = {}
+            for src, dst in _RISH_MAP.items():
+                if src in names:
+                    rename[src] = dst
+            unknowns = [v for v in names if v not in _RISH_MAP
+                        and v not in ("u10", "v10") and "unknown" in v.lower()]
+            if unknowns and {"lcc", "mcc", "hcc"} <= names:   # total cloud rides with l/m/h
+                rename[unknowns[0]] = "cloud_cover_percentage"
+            keep = dict(rename)
+            d = sub.rename(keep)[list(keep.values())] if keep else None
+            if {"u10", "v10"} <= names:
+                ws = np.hypot(sub["u10"].values, sub["v10"].values).astype("float32")
+                wda = xr.DataArray(ws, dims=sub["u10"].dims, coords=sub["u10"].coords)
+                d = d.assign(wind_speed_10m_metrePerSecond=wda) if d is not None else \
+                    xr.Dataset({"wind_speed_10m_metrePerSecond": wda})
+            if d is None:
+                continue
+            for v in d.data_vars:
+                da = d[v]
+                for i, s in enumerate(step):
+                    if s < 1:
+                        continue                              # cube lead starts at 1
+                    frame = da.isel(step=i).assign_coords(lead=int(s))
+                    # Drop cfgrib auxiliary scalar coords that conflict across sub-datasets
+                    # (heightAboveGround, valid_time, time, meanSea, surface, step, etc.)
+                    _keep = {"lead", "latitude", "longitude"}
+                    frame = frame.drop_vars(
+                        [c for c in frame.coords if c not in _keep], errors="ignore")
+                    per_var.setdefault(v, []).append(frame.astype("float64"))
+    if not per_var:
+        raise ValueError(f"{os.path.basename(anchor)}: no decodable RISH fields")
+    hi = max(int(fr["lead"]) for frames in per_var.values() for fr in frames)
+    lead = np.arange(1, hi + 1, dtype="int32")
+    out = {}
+    for v, frames in per_var.items():
+        stacked = xr.concat(sorted(frames, key=lambda a: int(a["lead"])), dim="lead")
+        out[v] = stacked.reindex(lead=lead)                   # per-var gaps -> NaN
+    ds = xr.Dataset(out).sortby("latitude").sel(latitude=slice(None, 46.0))
+    if "temperature_2m_celsius" in ds:
+        ds["temperature_2m_celsius"] = (ds["temperature_2m_celsius"] - 273.15).astype("float32")
+    if "surface_pressure_hectopascal" in ds:
+        ds["surface_pressure_hectopascal"] = (ds["surface_pressure_hectopascal"] / 100.0).astype("float32")
+    # Cast remaining float64 vars to float32 (shortwave stays float64 for lossless mean;
+    # temperature and pressure already cast above; wind speed already float32 from np.hypot).
+    ds = ds.assign({v: ds[v].astype("float32")
+                    for v in ds.data_vars
+                    if v not in ("temperature_2m_celsius", "surface_pressure_hectopascal",
+                                 "shortwave_radiation_wattPerSquareMetre")
+                    and ds[v].dtype != np.float32})
+    for v in ds.data_vars:
+        if "_" in v:
+            ds[v].attrs["units"] = v.rsplit("_", 1)[-1]
+    return ds.load()
+
+
+READERS = {"parquet": read_run_parquet, "zarrzip": read_run_zarrzip, "rish": read_run_rish}
 
 
 # --------------------------------------------------------------------------- #
@@ -506,7 +607,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", default=DATA_DIR)
-    ap.add_argument("--source", choices=("auto", "parquet", "zarrzip"), default="auto")
+    ap.add_argument("--source", choices=("auto", "parquet", "zarrzip", "rish"), default="auto")
     ap.add_argument("--mode", choices=("A", "B"), default="A",
                     help="A = run_init cube (default); B = derived valid_time cube")
     ap.add_argument("--out", default=None, help="output store path")
