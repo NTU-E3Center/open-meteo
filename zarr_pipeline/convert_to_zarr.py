@@ -241,70 +241,150 @@ def _open_rish_segment(path):
 def read_run_rish(anchor: str) -> xr.Dataset:
     """RISH MSM surface GRIB2 (5 segments, missing extensions tolerated) -> reader-contract
     dataset: (lead, latitude, longitude), lead 1..hi contiguous (per-var NaN where absent),
-    float32 cube-named vars, lat ascending cropped to <= 46.0 (silver grid north bound)."""
-    per_var: dict[str, list[xr.DataArray]] = {}
+    float32 cube-named vars, lat ascending cropped to <= 46.0 (silver grid north bound).
+
+    Assembly uses preallocated numpy arrays (float32) to avoid the ~5 GB peak that arose
+    from per-step DataArray copies + xr.concat.  Two passes over segment paths:
+      1. Scan all segments to determine hi (max integer step hour).
+      2. Preallocate (hi, nlat, nlon) float32 arrays per output var, then fill directly
+         from each sub-dataset's numpy arrays with unit conversions at fill time.
+    Peak memory: < 1.5 GB for a 78-lead run (vs ~5 GB previously).
+    """
+    # ------------------------------------------------------------------ #
+    # Pass 1: scan all segments to find hi (max step >= 1) and grid shape #
+    # ------------------------------------------------------------------ #
+    hi = 0
+    _lat_ref = None
+    _lon_ref = None
+
     for seg_path in rish_segment_paths(anchor):
         if not os.path.exists(seg_path):
             continue
-        for sub in _open_rish_segment(seg_path):
+        subs = _open_rish_segment(seg_path)
+        for sub in subs:
             step = np.asarray(sub["step"].values)
-            if np.issubdtype(step.dtype, np.timedelta64):     # real cfgrib gives timedelta
+            if np.issubdtype(step.dtype, np.timedelta64):
                 step = (step / np.timedelta64(1, "h")).astype(int)
+            valid = step[step >= 1]
+            if valid.size > 0:
+                hi = max(hi, int(valid.max()))
+            if _lat_ref is None and "latitude" in sub.coords:
+                _lat_ref = np.asarray(sub["latitude"].values, dtype="float32")
+                _lon_ref = np.asarray(sub["longitude"].values, dtype="float32")
+            sub.close()
+        del subs
+
+    if hi == 0:
+        raise ValueError(f"{os.path.basename(anchor)}: no decodable RISH fields")
+
+    # Normalise lat to ascending order (RISH native is descending).
+    lat_raw = _lat_ref
+    lon_raw = _lon_ref
+    if lat_raw[0] > lat_raw[-1]:           # descending -> flip index
+        lat_asc = lat_raw[::-1].copy()
+        flip_lat = True
+    else:
+        lat_asc = lat_raw.copy()
+        flip_lat = False
+    nlat = lat_asc.size
+    nlon = lon_raw.size
+
+    # ------------------------------------------------------------------ #
+    # Preallocate output arrays: (hi, nlat, nlon) float32, NaN-filled    #
+    # ------------------------------------------------------------------ #
+    arrays: dict[str, np.ndarray] = {}
+
+    # ------------------------------------------------------------------ #
+    # Pass 2: fill arrays from each segment                               #
+    # ------------------------------------------------------------------ #
+    for seg_path in rish_segment_paths(anchor):
+        if not os.path.exists(seg_path):
+            continue
+        subs = _open_rish_segment(seg_path)
+        for sub in subs:
+            step = np.asarray(sub["step"].values)
+            if np.issubdtype(step.dtype, np.timedelta64):
+                step = (step / np.timedelta64(1, "h")).astype(int)
+
             names = set(sub.data_vars)
-            rename = {}
+
+            # Determine renaming for this sub-dataset.
+            rename: dict[str, str] = {}
             for src, dst in _RISH_MAP.items():
                 if src in names:
                     rename[src] = dst
             unknowns = [v for v in names if v not in _RISH_MAP
                         and v not in ("u10", "v10") and "unknown" in v.lower()]
-            if unknowns and {"lcc", "mcc", "hcc"} <= names:   # total cloud rides with l/m/h
+            if unknowns and {"lcc", "mcc", "hcc"} <= names:
                 rename[unknowns[0]] = "cloud_cover_percentage"
-            keep = dict(rename)
-            d = sub.rename(keep)[list(keep.values())] if keep else None
-            if {"u10", "v10"} <= names:
-                ws = np.hypot(sub["u10"].values, sub["v10"].values).astype("float32")
-                wda = xr.DataArray(ws, dims=sub["u10"].dims, coords=sub["u10"].coords)
-                d = d.assign(wind_speed_10m_metrePerSecond=wda) if d is not None else \
-                    xr.Dataset({"wind_speed_10m_metrePerSecond": wda})
-            if d is None:
-                continue
-            for v in d.data_vars:
-                da = d[v]
-                for i, s in enumerate(step):
-                    if s < 1:
-                        continue                              # cube lead starts at 1
-                    frame = da.isel(step=i).assign_coords(lead=int(s))
-                    # Drop cfgrib auxiliary scalar coords that conflict across sub-datasets
-                    # (heightAboveGround, valid_time, time, meanSea, surface, step, etc.)
-                    _keep = {"lead", "latitude", "longitude"}
-                    frame = frame.drop_vars(
-                        [c for c in frame.coords if c not in _keep], errors="ignore")
-                    per_var.setdefault(v, []).append(frame.astype("float64"))
-    if not per_var:
+
+            has_wind = {"u10", "v10"} <= names
+
+            # Ensure preallocated arrays exist for every output var.
+            for dst in rename.values():
+                if dst not in arrays:
+                    arrays[dst] = np.full((hi, nlat, nlon), np.nan, dtype="float32")
+            if has_wind and "wind_speed_10m_metrePerSecond" not in arrays:
+                arrays["wind_speed_10m_metrePerSecond"] = np.full(
+                    (hi, nlat, nlon), np.nan, dtype="float32")
+
+            for i, s in enumerate(step):
+                if s < 1 or s > hi:
+                    continue
+                lead_idx = int(s) - 1   # 0-based index into preallocated array
+
+                # Fill named vars.
+                for src, dst in rename.items():
+                    raw = sub[src].values[i] if sub[src].values.ndim == 3 else sub[src].values
+                    row = raw[::-1].astype("float32") if flip_lat else raw.astype("float32")
+                    # Unit conversions at fill time (avoid a second full-array pass).
+                    if dst == "temperature_2m_celsius":
+                        row = row - np.float32(273.15)
+                    elif dst == "surface_pressure_hectopascal":
+                        row = row / np.float32(100.0)
+                    arrays[dst][lead_idx] = row
+
+                # Wind speed from u10/v10 components.
+                if has_wind:
+                    u_raw = sub["u10"].values[i] if sub["u10"].values.ndim == 3 else sub["u10"].values
+                    v_raw = sub["v10"].values[i] if sub["v10"].values.ndim == 3 else sub["v10"].values
+                    ws = np.hypot(u_raw, v_raw).astype("float32")
+                    if flip_lat:
+                        ws = ws[::-1]
+                    arrays["wind_speed_10m_metrePerSecond"][lead_idx] = ws
+
+            sub.close()
+        del subs
+
+    if not arrays:
         raise ValueError(f"{os.path.basename(anchor)}: no decodable RISH fields")
-    hi = max(int(fr["lead"]) for frames in per_var.values() for fr in frames)
-    lead = np.arange(1, hi + 1, dtype="int32")
-    out = {}
-    for v, frames in per_var.items():
-        stacked = xr.concat(sorted(frames, key=lambda a: int(a["lead"])), dim="lead", coords="minimal", compat="override")
-        out[v] = stacked.reindex(lead=lead)                   # per-var gaps -> NaN
-    ds = xr.Dataset(out).sortby("latitude")
-    lat = ds.latitude.values
-    if not (abs(float(lat[0]) - 22.4) < 1e-3 and lat.size >= 473
-            and abs(float(lat[472]) - 46.0) < 1e-3):
-        raise ValueError(f"unexpected RISH latitude grid: {lat[0]}..{lat[-1]} n={lat.size}")
-    ds = ds.isel(latitude=slice(0, 473))
-    if ds.sizes["longitude"] != 481:
-        raise ValueError(f"unexpected RISH longitude size: {ds.sizes['longitude']} (expected 481)")
-    if "temperature_2m_celsius" in ds:
-        ds["temperature_2m_celsius"] = (ds["temperature_2m_celsius"] - 273.15).astype("float32")
-    if "surface_pressure_hectopascal" in ds:
-        ds["surface_pressure_hectopascal"] = (ds["surface_pressure_hectopascal"] / 100.0).astype("float32")
-    # Cast ALL remaining float64 vars to float32 to match the silver store's dtype contract.
-    # temperature and pressure already cast above; wind speed already float32 from np.hypot.
-    ds = ds.assign({v: ds[v].astype("float32")
-                    for v in ds.data_vars
-                    if ds[v].dtype != np.float32})
+
+    # ------------------------------------------------------------------ #
+    # Build Dataset from preallocated arrays (cropped to 473 lat rows)   #
+    # ------------------------------------------------------------------ #
+    lead_coord = np.arange(1, hi + 1, dtype="int32")
+
+    # Positional crop: rows 0..472 after ascending sort = 22.4..46.0
+    lat_crop = lat_asc[:473]
+    if not (abs(float(lat_crop[0]) - 22.4) < 1e-3 and abs(float(lat_crop[472]) - 46.0) < 1e-3):
+        raise ValueError(
+            f"unexpected RISH latitude grid: {lat_asc[0]}..{lat_asc[-1]} n={nlat}")
+    if nlon != 481:
+        raise ValueError(f"unexpected RISH longitude size: {nlon} (expected 481)")
+
+    data_vars = {}
+    for v, arr in arrays.items():
+        cropped = arr[:, :473, :]           # positional crop along lat axis
+        data_vars[v] = (("lead", "latitude", "longitude"), cropped)
+
+    ds = xr.Dataset(
+        data_vars,
+        coords={
+            "lead": lead_coord,
+            "latitude": lat_crop,
+            "longitude": lon_raw,
+        },
+    )
     for v in ds.data_vars:
         if "_" in v:
             ds[v].attrs["units"] = v.rsplit("_", 1)[-1]
