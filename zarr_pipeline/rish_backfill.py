@@ -74,8 +74,9 @@ def download_run(ts, dest_dir: str, sleep: float, timeout: int = 300) -> tuple[i
         with open(out, "wb") as f:
             for chunk in r.iter_content(1 << 20):
                 f.write(chunk)
-        if open(out, "rb").read(4) != b"GRIB":
-            raise IOError(f"not GRIB2: {name}")
+        with open(out, "rb") as fh:
+            if fh.read(4) != b"GRIB":
+                raise IOError(f"not GRIB2: {name}")
         fetched += 1
         time.sleep(sleep)
     return fetched, missing
@@ -84,7 +85,7 @@ def download_run(ts, dest_dir: str, sleep: float, timeout: int = 300) -> tuple[i
 def backfill(cube: str, start: str, end: str, cycles=(0, 12), sleep: float = 5.0,
              limit: int | None = None, dry_run: bool = False) -> int:
     todo = pending_runs(cube, start, end, cycles)
-    if limit:
+    if limit is not None:
         todo = todo[:limit]
     print(f"backfill: {len(todo)} pending runs ({start}..{end}, cycles={cycles})")
     if dry_run or not todo:
@@ -123,9 +124,15 @@ def validate_overlap(cube: str, n: int = 5, sleep: float = 5.0) -> int:
                 if v not in rish or v not in cube_run:
                     print(f"  {ts:%m-%d %HZ} {v}: MISSING -> FAIL"); ok = False
                     continue
-                a = rish[v].interp(latitude=cube_run.latitude,
-                                   longitude=cube_run.longitude) \
-                    .reindex(lead=cube_run.lead).values.ravel()
+                rlat, rlon = rish[v].latitude.values, rish[v].longitude.values
+                clat, clon = cube_run.latitude.values, cube_run.longitude.values
+                if not (rlat.size == clat.size and rlon.size == clon.size
+                        and np.allclose(rlat, clat, atol=1e-3)
+                        and np.allclose(rlon, clon, atol=1e-3)):
+                    print(f"  {ts:%m-%d %HZ} {v}: GRID MISMATCH rish {rlat.size}x{rlon.size} "
+                          f"vs cube {clat.size}x{clon.size} -> FAIL"); ok = False
+                    continue
+                a = rish[v].reindex(lead=cube_run.lead).values.ravel()
                 b = cube_run[v].values.ravel()
                 m = np.isfinite(a) & np.isfinite(b)
                 if v.startswith("shortwave"):
@@ -157,7 +164,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--validate-overlap", type=int, default=None, dest="gate")
     a = ap.parse_args()
-    if a.gate:
+    if a.gate is not None:
+        if a.gate < 1:
+            ap.error("--validate-overlap N must be >= 1")
         sys.exit(validate_overlap(a.cube, a.gate, a.sleep))
     if not (a.start and a.end):
         ap.error("--start/--end required (or --validate-overlap N)")
