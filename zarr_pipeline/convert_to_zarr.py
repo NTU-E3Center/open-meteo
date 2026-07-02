@@ -131,7 +131,7 @@ def detect_source(data_dir):
         return "zarrzip"
     if glob.glob(os.path.join(data_dir, "Z__C_RJTD_*_FH00-15_grib2.bin")):
         return "rish"
-    raise SystemExit(f"no *.parquet or *.zarr.zip files in {data_dir}")
+    raise SystemExit(f"no supported run files (*.parquet, *.zarr.zip, Z__C_RJTD_*_FH00-15_grib2.bin) in {data_dir}")
 
 
 def discover_runs(data_dir, source):
@@ -286,7 +286,7 @@ def read_run_rish(anchor: str) -> xr.Dataset:
     lead = np.arange(1, hi + 1, dtype="int32")
     out = {}
     for v, frames in per_var.items():
-        stacked = xr.concat(sorted(frames, key=lambda a: int(a["lead"])), dim="lead")
+        stacked = xr.concat(sorted(frames, key=lambda a: int(a["lead"])), dim="lead", coords="minimal", compat="override")
         out[v] = stacked.reindex(lead=lead)                   # per-var gaps -> NaN
     ds = xr.Dataset(out).sortby("latitude")
     lat = ds.latitude.values
