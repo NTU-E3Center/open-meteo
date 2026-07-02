@@ -32,6 +32,8 @@ def prepend(cube_path: str, new_start: str, dry_run: bool = False) -> dict:
     names = [v for v in ds.data_vars]                       # incl. slot_filled
     ds.close()
     n_old = ri.size
+    if n_old < 2:
+        raise SystemExit("run_init has only 1 slot; cannot infer step")
     step = int((ri[1] - ri[0]) / np.timedelta64(1, "h"))
     diffs = np.unique(np.diff(ri).astype("timedelta64[h]").astype(int))
     if not (diffs == step).all():
