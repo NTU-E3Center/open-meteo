@@ -288,7 +288,14 @@ def read_run_rish(anchor: str) -> xr.Dataset:
     for v, frames in per_var.items():
         stacked = xr.concat(sorted(frames, key=lambda a: int(a["lead"])), dim="lead")
         out[v] = stacked.reindex(lead=lead)                   # per-var gaps -> NaN
-    ds = xr.Dataset(out).sortby("latitude").sel(latitude=slice(None, 46.0))
+    ds = xr.Dataset(out).sortby("latitude")
+    lat = ds.latitude.values
+    if not (abs(float(lat[0]) - 22.4) < 1e-3 and lat.size >= 473
+            and abs(float(lat[472]) - 46.0) < 1e-3):
+        raise ValueError(f"unexpected RISH latitude grid: {lat[0]}..{lat[-1]} n={lat.size}")
+    ds = ds.isel(latitude=slice(0, 473))
+    if ds.sizes["longitude"] != 481:
+        raise ValueError(f"unexpected RISH longitude size: {ds.sizes['longitude']} (expected 481)")
     if "temperature_2m_celsius" in ds:
         ds["temperature_2m_celsius"] = (ds["temperature_2m_celsius"] - 273.15).astype("float32")
     if "surface_pressure_hectopascal" in ds:

@@ -54,7 +54,9 @@ def test_read_run_rish_contract(monkeypatch, tmp_path):
         (tmp_path / f"Z__C_RJTD_20250801000000_MSM_GPV_Rjp_Lsurf_FH{fh}_grib2.bin").write_bytes(b"GRIB")
     ds = cz.read_run_rish(str(anchor))
     assert list(ds["lead"].values) == list(range(1, 79))     # contiguous 1..78, FH0 dropped
-    assert float(ds.latitude.max()) <= 46.0                  # cropped to cube north bound
+    assert ds.sizes["latitude"] == 473                        # positional crop: 473 rows
+    assert ds.sizes["longitude"] == 481                       # full longitude extent
+    assert abs(float(ds.latitude.max()) - 46.0) < 1e-3       # northmost row ≈ 46.0
     assert ds.latitude.values[0] < ds.latitude.values[-1]    # ascending
     assert ds["temperature_2m_celsius"].dtype == np.float32
     np.testing.assert_allclose(
