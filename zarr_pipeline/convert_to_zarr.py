@@ -233,9 +233,94 @@ def rish_segment_paths(anchor: str) -> list[str]:
 
 
 def _open_rish_segment(path):
-    """Seam for tests: cfgrib sub-datasets of one RISH segment file."""
-    import cfgrib
-    return cfgrib.open_datasets(path, backend_kwargs={"indexpath": ""})
+    """Seam for tests: read one RISH GRIB2 segment -> list containing one xr.Dataset.
+
+    Uses eccodes message-by-message iteration instead of cfgrib.open_datasets to avoid
+    the O(n_messages^2) xr.merge accumulation that cfgrib performs internally, which
+    inflated peak VM to ~79 GB for a 5-segment 78-lead run.  Each GRIB message is read
+    once, its values extracted immediately, and the handle released; no cfgrib/xarray
+    merge intermediates are created.
+
+    Returns a single-element list so callers that iterate over sub-datasets work unchanged.
+    The step coord is int (hours), not timedelta64, so the timedelta branch in read_run_rish
+    is never taken.
+    """
+    import eccodes
+
+    # shortName aliases: eccodes uses '10u'/'10v'; cfgrib exposes them as 'u10'/'v10'.
+    _ALIAS = {"10u": "u10", "10v": "v10"}
+    # Variables that carry no useful forecast fields and are skipped.
+    _SKIP = frozenset({"prmsl"})
+
+    lat_arr: np.ndarray | None = None
+    lon_arr: np.ndarray | None = None
+    ny_g = nx_g = 0
+
+    # var_data[varname][endStep] = (ny, nx) float32 array.
+    var_data: dict[str, dict[int, np.ndarray]] = {}
+
+    eccodes.codes_grib_multi_support_on()
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                h = eccodes.codes_grib_new_from_file(fh)
+                if h is None:
+                    break
+                try:
+                    shortName = eccodes.codes_get(h, "shortName", ktype=str)
+                    stepRange = eccodes.codes_get(h, "stepRange", ktype=str)
+                    endStep = eccodes.codes_get(h, "endStep")   # integer hours
+
+                    # Skip variables that are never used downstream.
+                    if shortName in _SKIP:
+                        continue
+                    # Time-averaged 'unknown' (e.g. "1-2") is NOT total cloud cover;
+                    # the instantaneous 'unknown' (stepRange has no '-') is.
+                    if shortName == "unknown" and "-" in stepRange:
+                        continue
+
+                    vname = _ALIAS.get(shortName, shortName)
+
+                    # Read grid spec and lat/lon only from the first valid message.
+                    if lat_arr is None:
+                        ny_g = eccodes.codes_get(h, "Nj")
+                        nx_g = eccodes.codes_get(h, "Ni")
+                        lat_f = eccodes.codes_get(h, "latitudeOfFirstGridPointInDegrees")
+                        lat_l = eccodes.codes_get(h, "latitudeOfLastGridPointInDegrees")
+                        lon_f = eccodes.codes_get(h, "longitudeOfFirstGridPointInDegrees")
+                        lon_l = eccodes.codes_get(h, "longitudeOfLastGridPointInDegrees")
+                        lat_arr = np.linspace(lat_f, lat_l, ny_g, dtype="float32")
+                        lon_arr = np.linspace(lon_f, lon_l, nx_g, dtype="float32")
+
+                    vals = eccodes.codes_get_values(h).reshape(ny_g, nx_g).astype("float32")
+                    if vname not in var_data:
+                        var_data[vname] = {}
+                    var_data[vname][endStep] = vals
+                finally:
+                    eccodes.codes_release(h)
+    finally:
+        eccodes.codes_grib_multi_support_off()
+
+    if not var_data:
+        return []
+
+    steps_sorted = sorted({s for d in var_data.values() for s in d})
+    step_arr = np.array(steps_sorted, dtype="int32")
+    n_steps = len(steps_sorted)
+    step_idx = {s: i for i, s in enumerate(steps_sorted)}
+
+    data_vars_xr: dict[str, tuple] = {}
+    for vname, step_dict in var_data.items():
+        cube = np.full((n_steps, ny_g, nx_g), np.nan, dtype="float32")
+        for s, arr in step_dict.items():
+            cube[step_idx[s]] = arr
+        data_vars_xr[vname] = (("step", "latitude", "longitude"), cube)
+
+    ds = xr.Dataset(
+        data_vars_xr,
+        coords={"step": step_arr, "latitude": lat_arr, "longitude": lon_arr},
+    )
+    return [ds]
 
 
 def read_run_rish(anchor: str) -> xr.Dataset:
@@ -328,33 +413,48 @@ def read_run_rish(anchor: str) -> xr.Dataset:
                 arrays["wind_speed_10m_metrePerSecond"] = np.full(
                     (hi, nlat, nlon), np.nan, dtype="float32")
 
+            # Materialize each source variable ONCE per sub-dataset (single cfgrib decode).
+            # Indexing sub[src].values INSIDE the step loop would re-decode the full
+            # (step, lat, lon) array on every iteration, multiplying peak memory by n_steps.
+            mat: dict[str, np.ndarray] = {}
+            for src in rename:
+                mat[src] = np.asarray(sub[src].values, dtype="float32")
+            if has_wind:
+                u_all = np.asarray(sub["u10"].values, dtype="float32")
+                v_all = np.asarray(sub["v10"].values, dtype="float32")
+                ws_all = np.hypot(u_all, v_all)   # (step, lat, lon) or (lat, lon)
+                del u_all, v_all
+
             for i, s in enumerate(step):
                 if s < 1 or s > hi:
                     continue
                 lead_idx = int(s) - 1   # 0-based index into preallocated array
 
-                # Fill named vars.
+                # Fill named vars (slice row from already-materialized array).
                 for src, dst in rename.items():
-                    raw = sub[src].values[i] if sub[src].values.ndim == 3 else sub[src].values
-                    row = raw[::-1].astype("float32") if flip_lat else raw.astype("float32")
+                    arr_src = mat[src]
+                    raw = arr_src[i] if arr_src.ndim == 3 else arr_src
+                    row = raw[::-1] if flip_lat else raw
                     # Unit conversions at fill time (avoid a second full-array pass).
                     if dst == "temperature_2m_celsius":
-                        row = row - np.float32(273.15)
+                        arrays[dst][lead_idx] = row - np.float32(273.15)
                     elif dst == "surface_pressure_hectopascal":
-                        row = row / np.float32(100.0)
-                    arrays[dst][lead_idx] = row
+                        arrays[dst][lead_idx] = row / np.float32(100.0)
+                    else:
+                        arrays[dst][lead_idx] = row
 
-                # Wind speed from u10/v10 components.
+                # Wind speed from pre-computed hypot array.
                 if has_wind:
-                    u_raw = sub["u10"].values[i] if sub["u10"].values.ndim == 3 else sub["u10"].values
-                    v_raw = sub["v10"].values[i] if sub["v10"].values.ndim == 3 else sub["v10"].values
-                    ws = np.hypot(u_raw, v_raw).astype("float32")
-                    if flip_lat:
-                        ws = ws[::-1]
-                    arrays["wind_speed_10m_metrePerSecond"][lead_idx] = ws
+                    ws_row = ws_all[i] if ws_all.ndim == 3 else ws_all
+                    arrays["wind_speed_10m_metrePerSecond"][lead_idx] = (
+                        ws_row[::-1] if flip_lat else ws_row)
 
+            del mat
+            if has_wind:
+                del ws_all
             sub.close()
         del subs
+        gc.collect()
 
     if not arrays:
         raise ValueError(f"{os.path.basename(anchor)}: no decodable RISH fields")
