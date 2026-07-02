@@ -293,13 +293,11 @@ def read_run_rish(anchor: str) -> xr.Dataset:
         ds["temperature_2m_celsius"] = (ds["temperature_2m_celsius"] - 273.15).astype("float32")
     if "surface_pressure_hectopascal" in ds:
         ds["surface_pressure_hectopascal"] = (ds["surface_pressure_hectopascal"] / 100.0).astype("float32")
-    # Cast remaining float64 vars to float32 (shortwave stays float64 for lossless mean;
-    # temperature and pressure already cast above; wind speed already float32 from np.hypot).
+    # Cast ALL remaining float64 vars to float32 to match the silver store's dtype contract.
+    # temperature and pressure already cast above; wind speed already float32 from np.hypot.
     ds = ds.assign({v: ds[v].astype("float32")
                     for v in ds.data_vars
-                    if v not in ("temperature_2m_celsius", "surface_pressure_hectopascal",
-                                 "shortwave_radiation_wattPerSquareMetre")
-                    and ds[v].dtype != np.float32})
+                    if ds[v].dtype != np.float32})
     for v in ds.data_vars:
         if "_" in v:
             ds[v].attrs["units"] = v.rsplit("_", 1)[-1]

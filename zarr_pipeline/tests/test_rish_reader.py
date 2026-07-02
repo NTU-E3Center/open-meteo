@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 import convert_to_zarr as cz
 
@@ -62,7 +63,8 @@ def test_read_run_rish_contract(monkeypatch, tmp_path):
         ds["wind_speed_10m_metrePerSecond"].isel(lead=0).values, 5.0, atol=1e-4)  # 3-4-5
     np.testing.assert_allclose(
         ds["surface_pressure_hectopascal"].isel(lead=0).values, 1013.25, atol=1e-2)
-    assert float(ds["shortwave_radiation_wattPerSquareMetre"].isel(lead=0).mean()) == 500.0
+    assert float(ds["shortwave_radiation_wattPerSquareMetre"].isel(lead=0).mean()) == pytest.approx(500.0, rel=1e-5)
+    assert all(ds[v].dtype == np.float32 for v in ds.data_vars)
     expected = {"shortwave_radiation_wattPerSquareMetre", "temperature_2m_celsius",
                 "relative_humidity_2m_percentage", "wind_speed_10m_metrePerSecond",
                 "cloud_cover_low_percentage", "cloud_cover_mid_percentage",
