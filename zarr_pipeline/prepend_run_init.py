@@ -7,8 +7,8 @@ START shifts every existing run_init index by a constant offset, so this is NOT 
 only -- but because the cube chunks run_init at size 1, the shift is pure chunk-DIRECTORY
 renames (<var>/c/<j> -> <var>/c/<j+offset>), no data re-encoding. Steps:
   1. resize every run_init-dimensioned array to the new length (grows the END internally)
-  2. rename chunk dirs j -> j+offset for data vars and slot_filled (offset > n_old, so
-     target paths never collide with source paths -- verified before any rename)
+  2. rename chunk dirs j -> j+offset for data vars and slot_filled (processed
+     highest-first so no rename clobbers a source that hasn't moved yet)
   3. rewrite the run_init coordinate array with the new axis
   4. re-consolidate metadata
 Verification (bit-exact old slots at shifted positions) is the caller's job -- see
