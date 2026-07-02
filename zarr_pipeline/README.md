@@ -36,4 +36,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `migrate_{jma,dwd}_silver.sh`, `migration_precheck.py` | rebuild Silver from the `.zarr.zip` archive (reference / disaster recovery) |
 | `reshard_silver{,_lowdisk}.py`, `paced_upload.py` | re-shard + rate-limited bulk upload (used when rebuilding) |
 
+## Examples
+- [examples/partial_read_demo.ipynb](examples/partial_read_demo.ipynb) — load only what you need
+  (Taiwan region / specific variables / specific runs) straight from HF, confirming partial/lazy
+  reads. Run with: `pip install -r requirements.txt -r examples/requirements-notebook.txt`.
+
 Full design + history: [docs/migration-plan.md](docs/migration-plan.md).

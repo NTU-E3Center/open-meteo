@@ -1,0 +1,6 @@
+# Extra deps to RUN the example notebooks (on top of ../requirements.txt).
+#   pip install -r ../requirements.txt -r requirements-notebook.txt
+jupyterlab
+nbconvert
+ipykernel
+matplotlib   # optional, for plotting the loaded arrays
