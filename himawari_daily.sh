@@ -22,3 +22,27 @@ SINCE="$(date -u -v-5d +%Y-%m-%d)"
 UNTIL="$(date -u -v-1d +%Y-%m-%d)"
 echo "[$(date -u)] himawari daily: window ${SINCE}..${UNTIL}"
 python3 himawari_backfill.py --since "${SINCE}" --until "${UNTIL}" --workers 2
+
+# ---------------------------------------------------------------------------
+# Optional: region-write each completed day into the Himawari silver cube.
+# Enabled only when HIMAWARI_CUBE=1 (add to ~/.himawari_ftp.env or crontab).
+# Failures in the cube step are logged but do NOT break the zip pipeline.
+# ---------------------------------------------------------------------------
+if [ "${HIMAWARI_CUBE:-0}" = "1" ]; then
+  echo "[$(date -u)] HIMAWARI_CUBE=1 — writing window to silver cube"
+  # Re-iterate the same [SINCE..UNTIL] window (macOS BSD date).
+  # We count forward from SINCE for N days where N = (UNTIL - SINCE) in days + 1.
+  SINCE_EPOCH=$(date -u -j -f "%Y-%m-%d" "${SINCE}" +%s)
+  UNTIL_EPOCH=$(date -u -j -f "%Y-%m-%d" "${UNTIL}" +%s)
+  NDAYS=$(( (UNTIL_EPOCH - SINCE_EPOCH) / 86400 + 1 ))
+  for i in $(seq 0 $((NDAYS - 1))); do
+    CUBE_DAY=$(date -u -j -v+"${i}d" -f "%Y-%m-%d" "${SINCE}" +%Y-%m-%d)
+    echo "[$(date -u)] cube: writing ${CUBE_DAY} ..."
+    if python3 himawari_day_to_cube.py --day "${CUBE_DAY}" --from-hf; then
+      echo "[$(date -u)] cube: ${CUBE_DAY} OK"
+    else
+      echo "[$(date -u)] cube: ${CUBE_DAY} FAILED (zip pipeline unaffected)" >&2
+    fi
+  done
+  echo "[$(date -u)] cube window done"
+fi
