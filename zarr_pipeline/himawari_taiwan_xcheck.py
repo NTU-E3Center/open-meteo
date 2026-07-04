@@ -74,21 +74,11 @@ def try_exact_sel(cube: xr.DataArray, nc: xr.DataArray) -> tuple[xr.DataArray, s
         # Fall back to nearest
         cropped = cube.sel(latitude=nc_lat, longitude=nc_lon, method="nearest")
 
-        # Compute max coordinate offset
-        cube_lat = cube.latitude.values
-        cube_lon = cube.longitude.values
-
-        # Map nc coords to nearest cube indices
-        lat_indices = np.searchsorted(cube_lat, nc_lat)
-        lon_indices = np.searchsorted(cube_lon, nc_lon)
-
-        # Clamp to valid range
-        lat_indices = np.clip(lat_indices, 0, len(cube_lat) - 1)
-        lon_indices = np.clip(lon_indices, 0, len(cube_lon) - 1)
-
-        # Compute offsets
-        lat_offsets = np.abs(cube_lat[lat_indices] - nc_lat)
-        lon_offsets = np.abs(cube_lon[lon_indices] - nc_lon)
+        # True nearest-neighbour offset: what the cropped selection actually used
+        # (searchsorted alone returns the upper-bound cell, over-reporting by up
+        # to one grid step when the value sits at/just below a grid point)
+        lat_offsets = np.abs(cropped.latitude.values - np.asarray(nc_lat))
+        lon_offsets = np.abs(cropped.longitude.values - np.asarray(nc_lon))
         max_offset = max(lat_offsets.max(), lon_offsets.max())
 
         disclosure = (
