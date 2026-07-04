@@ -88,11 +88,20 @@ def try_exact_sel(cube: xr.DataArray, nc: xr.DataArray) -> tuple[xr.DataArray, s
         return cropped, disclosure
 
 
-def xcheck_month(store_path: str, nc: xr.DataArray, month: str) -> str:
+def xcheck_month(store_path: str, nc: xr.DataArray, month: str,
+                 shift_hours: int = 0) -> str:
     """Compare nc (label) against cube for one month.
+
+    shift_hours: subtract this from the nc valid_time before matching cube time.
+    The label caches stamp the observation window END (+1h SWR_TIME_OFFSET in
+    solar-ghi-nwp jaxa.py); the cube stores the raw JAXA file hour (window START).
+    shift_hours=1 therefore compares like-for-like.
 
     Returns a report line (or error message).
     """
+    if shift_hours:
+        nc = nc.assign_coords(
+            valid_time=nc.valid_time.values - np.timedelta64(shift_hours, "h"))
     # Open cube
     cube_ds = xr.open_zarr(store_path, consolidated=True)
     try:
@@ -164,6 +173,11 @@ def main() -> None:
         "jaxa_cache_dir",
         help="Directory containing swr_taiwan_adv_YYYYMM.nc files",
     )
+    ap.add_argument(
+        "--shift-hours", type=int, default=0,
+        help="Subtract N hours from nc valid_time before matching (label caches "
+             "stamp window END; cube stores raw file hour = window START; use 1).",
+    )
     args = ap.parse_args()
 
     store_path = args.store
@@ -187,7 +201,8 @@ def main() -> None:
             continue
 
         try:
-            report = xcheck_month(store_path, nc, month)
+            report = xcheck_month(store_path, nc, month,
+                                  shift_hours=args.shift_hours)
             print(report, flush=True)
         except Exception as exc:
             print(f"{month}: UNEXPECTED ERROR: {exc}", flush=True)
