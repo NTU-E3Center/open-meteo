@@ -20,7 +20,7 @@ Behaviour
 - --verify N: after transcode, sample N random filled days (seeded RNG), assert
   bit-exact over all 24h SWR; print "VERIFY YYYYMMDD PASS/FAIL"; exit nonzero
   if any mismatch.
-- --limit K: stop after K written days (smoke-test escape hatch).
+- --limit K: process only the first K days, written+skipped+failed (smoke-test escape hatch).
 - Summary line: "days written=W / skipped=S / failed=F / verified=V"
 
 Resume: rerun is safe — day_filled skip gate makes it idempotent.
@@ -126,9 +126,6 @@ def transcode(store_path: str, verify_n: int = 0, limit: int | None = None) -> i
     # This makes reruns with the same --limit idempotent (filled days count toward K).
     if limit is not None:
         days = days[:limit]
-        total_limited = len(days)
-    else:
-        total_limited = total
 
     store_created = False
 
@@ -253,7 +250,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--limit", type=int, default=None, metavar="K",
-        help="Stop after K written days (for smoke tests).",
+        help="Process only the first K days, written+skipped+failed (for smoke tests).",
     )
     args = ap.parse_args()
     sys.exit(transcode(args.store, verify_n=args.verify, limit=args.limit))
