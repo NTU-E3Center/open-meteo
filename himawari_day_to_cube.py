@@ -33,7 +33,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "zarr_pipeline"))
 
 from himawari_cube import day_filled, write_day  # noqa: E402
-from himawari_transcode import _normalize_times, _open_zip  # noqa: E402
+from himawari_transcode import _open_zip  # noqa: E402  (calls _normalize_times internally)
 
 # ---------------------------------------------------------------------------
 # Constants

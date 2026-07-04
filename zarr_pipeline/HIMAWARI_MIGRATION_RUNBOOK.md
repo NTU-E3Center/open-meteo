@@ -119,9 +119,9 @@ for c in list(commits)[:5]:
 **PRECONDITION:** Confirm that at least 3 consecutive days have `slot_filled == True`
 in the remote cube (run the verification block above).  All three must show `FILLED`.
 
-**Action:** Disable the JAXA FTP cron job by commenting it out or removing `HIMAWARI_CUBE`
-guard and removing `HIMAWARI_FTP_USER` / `HIMAWARI_FTP_PW` from the environment so
-`himawari_daily.sh` fails the credential check harmlessly.
+**Action:** Comment out the `himawari_daily.sh` crontab entry (the ONLY clean way to
+stop zip writes — do NOT just remove the FTP credentials: the `:?` guard would then
+make every cron run exit with an error and spam the cron log).
 
 ```bash
 # Option: comment out the crontab entry for himawari_daily.sh
