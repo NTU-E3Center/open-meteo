@@ -36,6 +36,7 @@ import tempfile
 import zipfile
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 from huggingface_hub import HfApi, hf_hub_download
 
@@ -97,7 +98,30 @@ def _open_zip(local_zip: str) -> tuple[xr.Dataset, str]:
                 zarr_root = candidate
 
     ds = xr.open_zarr(zarr_root, consolidated=True)
-    return ds, tmpdir
+    return _normalize_times(ds), tmpdir
+
+
+def _normalize_times(ds: xr.Dataset) -> xr.Dataset:
+    """Snap off-grid scan timestamps to the hour (observed source anomaly: a
+    handful of days carry one ``HH:10`` stamp from a delayed Himawari scan,
+    e.g. 2026-03-23T20:10). Applied ONLY when safe and unambiguous:
+    every adjustment < 30 min AND the floored axis is exactly the source's
+    n unique consecutive hourly steps. Otherwise the dataset is returned
+    unchanged and write_day's validator rejects it loudly. Each adjustment
+    is disclosed on stdout."""
+    t = pd.DatetimeIndex(ds.time.values)
+    if ((t.minute == 0) & (t.second == 0)).all():
+        return ds
+    floored = t.floor("h")
+    off = t != floored
+    ok = ((t - floored) < pd.Timedelta(minutes=30)).all() \
+        and floored.is_unique \
+        and (np.diff(floored.values).astype("timedelta64[h]").astype(int) == 1).all()
+    if not ok:
+        return ds
+    for a, b in zip(t[off], floored[off]):
+        print(f"  NORMALIZED off-grid scan stamp: {a} -> {b}", flush=True)
+    return ds.assign_coords(time=floored.values)
 
 
 def _download_day(hf_path: str) -> str:
