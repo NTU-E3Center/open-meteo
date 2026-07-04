@@ -17,6 +17,14 @@ Provides three public functions:
     day_filled(path_or_ds, day) -> bool
         True if all 24 slot_filled entries for ``day`` equal 1.
 
+Time convention
+---------------
+The cube's time axis represents window START (= the raw JAXA file hour).
+The solar-ghi-nwp label caches use window END = time axis + 1 h
+(``SWR_TIME_OFFSET``).  Always check which convention a consumer expects before
+joining; mixing the two silently degrades model skill (r=0.84 instead of r=1.0
+on a regression xcheck).
+
 Design notes
 ------------
 * Blosc zstd (clevel=5, shuffle) on SWR matches the source day-cube codec from
@@ -128,6 +136,11 @@ def create_store(
             "source":  "JAXA Himawari Monitor L3 PAR/021 SWR",
             "layout":  "(time, latitude, longitude); hourly UTC observations",
             "grid":    f"{ny}x{nx}",
+            "time_convention": (
+                "window START (raw JAXA file hour). "
+                "The solar-ghi-nwp label caches use window END = this axis +1h (SWR_TIME_OFFSET)."
+            ),
+            "provenance": "created by himawari_cube.create_store",
         },
     )
 
@@ -232,6 +245,9 @@ def write_day(path: str, day_ds: xr.Dataset) -> int:
             f"time axis [{store_times[0]}..{store_times[-1]}]"
         )
     t_idx = int(hits[0])
+    assert t_idx % 24 == 0, (
+        "time axis must start at midnight (day-aligned chunks are load-bearing for upload safety)"
+    )
     ny, nx = store_lat.size, store_lon.size
 
     # --- region-write SWR first, then set slot_filled ---

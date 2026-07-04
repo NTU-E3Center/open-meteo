@@ -17,6 +17,9 @@ Go-forward idiom (mirrors go_forward.sh):
     3. Region-write the day into the local skeleton copy.
     4. Upload ONLY the new/changed chunk files in ONE HF commit.
 
+Time convention: the cube's time axis = window START (raw JAXA file hour).
+The solar-ghi-nwp label caches use window END = cube time + 1 h (SWR_TIME_OFFSET).
+
 Testing hook: --store-path <path> overrides the HF skeleton download and upload.
 When --store-path is given the script writes directly into that local store and
 skips all HF operations, making the core local write path testable without network.
