@@ -171,6 +171,29 @@ class TestCreateStore:
         with pytest.raises((FileExistsError, ValueError)):
             create_store(p, lat=LAT, lon=LON, time_start=TIME_START, time_end=TIME_END)
 
+    def test_production_grid_auto_tiling(self, tmp_path):
+        """Production grid (1801×1241) auto-tiles to (601, 640) without explicit chunks."""
+        # Real production coordinates
+        lat_prod = np.arange(-44, 46.0001, 0.05, dtype="float32")
+        lon_prod = np.arange(92, 154.0001, 0.05, dtype="float32")
+        assert lat_prod.size == 1801, f"Expected 1801 lat rows; got {lat_prod.size}"
+        assert lon_prod.size == 1241, f"Expected 1241 lon cols; got {lon_prod.size}"
+
+        p = str(tmp_path / "silver_prod.zarr")
+        create_store(
+            p,
+            lat=lat_prod,
+            lon=lon_prod,
+            time_start="2026-01-01",
+            time_end="2026-01-03",
+        )
+
+        # Verify zarr metadata: SWR spatial chunks should be (601, 640)
+        g = zarr.open_group(p, mode="r")
+        swr_chunks = g["SWR"].chunks
+        assert swr_chunks[1] == 601, f"Expected lat chunk=601; got {swr_chunks[1]}"
+        assert swr_chunks[2] == 640, f"Expected lon chunk=640; got {swr_chunks[2]}"
+
 
 # --------------------------------------------------------------------------- #
 # write_day
@@ -295,6 +318,14 @@ class TestWriteDay:
             np.testing.assert_array_equal(read_back, ds2["SWR"].values)
         finally:
             store.close()
+
+    def test_rejects_day_outside_time_axis(self, tmp_path):
+        """write_day with a day before time_start should raise ValueError."""
+        p = self._store(tmp_path)
+        outside_day = "2015-07-05"  # Before TIME_START="2015-07-07"
+        day_ds = _make_day_ds(outside_day, lat=LAT, lon=LON)
+        with pytest.raises(ValueError, match="not found on the store"):
+            write_day(p, day_ds)
 
 
 # --------------------------------------------------------------------------- #

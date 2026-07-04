@@ -67,9 +67,10 @@ def create_store(
     time_start:  First hour of the time axis (inclusive), ISO date string.
     time_end:    First hour PAST the time axis (exclusive), ISO date string.
     chunk_hours: Time chunk size (must divide into 24-h day boundary); default 24.
-    lat_chunk:   Spatial chunk size along latitude.  Defaults to full lat extent
-                 (sensible for tiny grids; use 601 for the 1801-row production grid).
-    lon_chunk:   Spatial chunk size along longitude.  Defaults to full lon extent.
+    lat_chunk:   Spatial chunk size along latitude.  Auto-detects production grid
+                 (1801 rows → 601; other grids → full extent).
+    lon_chunk:   Spatial chunk size along longitude.  Auto-detects production grid
+                 (1241 columns → 640; other grids → full extent).
 
     Raises
     ------
@@ -83,10 +84,10 @@ def create_store(
     lon = np.asarray(lon, dtype="float32")
     ny, nx = lat.size, lon.size
 
-    # Spatial chunking: use full grid if no tile requested (small/test grids),
-    # otherwise use caller-supplied tiles.
-    t_lat = lat_chunk if lat_chunk is not None else ny
-    t_lon = lon_chunk if lon_chunk is not None else nx
+    # Spatial chunking: auto-detect production grid (1801×1241), default to full grid
+    # for test/tiny grids.
+    t_lat = lat_chunk if lat_chunk is not None else (601 if ny == 1801 else ny)
+    t_lon = lon_chunk if lon_chunk is not None else (640 if nx == 1241 else nx)
 
     # Build hourly time axis
     t0 = np.datetime64(time_start, "h")
@@ -133,7 +134,7 @@ def create_store(
     encoding = {
         "SWR": {
             "chunks":     (chunk_hours, t_lat, t_lon),
-            "compressors": comp,
+            "compressors": (comp,),
             "fill_value": float("nan"),
         },
         "slot_filled": {
@@ -277,8 +278,8 @@ def day_filled(path_or_ds: Union[str, xr.Dataset], day: str) -> bool:
     -------
     bool
     """
-    t0_ns = np.datetime64(f"{day}T00", "ns")
-    t23_ns = np.datetime64(f"{day}T23", "ns")
+    t0_ns = np.datetime64(f"{day}T00:00", "ns")
+    t23_ns = np.datetime64(f"{day}T23:00", "ns")
 
     if isinstance(path_or_ds, xr.Dataset):
         ds = path_or_ds
