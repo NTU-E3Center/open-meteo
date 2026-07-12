@@ -92,7 +92,10 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/operation-dwd-icon.XXXXXX")
+# Work dir must live under $HOME: colima only shares $HOME into the Docker VM,
+# so a /tmp path mounted as /out is not writable from inside the container.
+WORK="${WORK_ROOT:-$DIR/.work}/operation-dwd-icon.$$"
+mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 RAW="$WORK/${STAMP}_raw.parquet"
 PARQUET="$WORK/${STAMP}.parquet"
