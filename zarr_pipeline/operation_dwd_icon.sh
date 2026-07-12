@@ -46,6 +46,8 @@ import datetime as dt
 import sys
 
 value = dt.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+if value.tzinfo is None:
+    value = value.replace(tzinfo=dt.UTC)  # bare timestamps are UTC, never local
 print(value.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:00:00"))
 PY
 )
