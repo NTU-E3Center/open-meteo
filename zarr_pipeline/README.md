@@ -26,10 +26,27 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 `deploy_goforward.sh` installs these as a daily cron (and, with `--retire-old`, removes the old
 `sweep_data_run` forecast cron while KEEPING the himawari cron).
 
+## Direct PV operation ingestion
+
+`go_forward.sh` is archive automation and must not be used as the hot serving input. For the
+PV operation pipeline, run the following job independently after a DWD ICON run is published:
+
+```bash
+ZARR_PY="$PWD/.venv/bin/python" ./operation_dwd_icon.sh \
+  --out /nas/solar-operation/raw/nwp/dwd_icon_latest.zarr
+```
+
+It resolves the latest DWD ICON S3 run, pins the exporter with `--run`, fetches only the
+Japan/Taiwan box (`lat=20..46`, `lon=119..146`), postprocesses one parquet, and writes one
+unpacked Zarr directory `(run_init, lead, latitude, longitude)` on NAS. It does not upload to
+Hugging Face or modify Bronze/Silver. Use `--run 2026-07-12T06:00:00Z --dry-run` to inspect a
+specific run before execution.
+
 ## Scripts
 | script | purpose |
 |---|---|
 | `go_forward.sh` | daily: export → parquet → Bronze → incremental append into the Silver cube |
+| `operation_dwd_icon.sh` | high-frequency: run-pinned DWD ICON → NAS `dwd_icon_latest.zarr`; no HF writes |
 | `deploy_goforward.sh` | build venv + preflight + install cron (+ `--retire-old`) |
 | `extend_hf_cube.sh` / `extend_run_init.py` | extend the Silver run_init axis (metadata-only); **re-run before 2028** |
 | `convert_to_zarr.py` | core: parquet/.zarr.zip → Mode A (`--source/--target-mb/--init/--append/--model`) |
