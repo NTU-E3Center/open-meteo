@@ -25,10 +25,16 @@ done
 REPO_BRONZE="jimtseng/apac-nwp-forecast-raw"
 REPO_SILVER="jimtseng/apac-nwp-forecast"
 CUBE_NAME="${MODEL}_silver.zarr"
-WORK="$DIR/.work/backfill-$MODEL"; rm -rf "$WORK"; mkdir -p "$WORK"; SKEL="$WORK/skel"
+WORK="$DIR/.work/backfill-$MODEL"; mkdir -p "$WORK"; SKEL="$WORK/skel"
+rm -rf "$WORK/dd" "$WORK/.mark"
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
 # ---- 1. download cube skeleton (metadata + coords, no data chunks) --------
+# Reused across invocations (list-only then real run); delete $WORK to force
+# a fresh skeleton if silver was updated elsewhere since.
+if [ -f "$SKEL/$CUBE_NAME/zarr.json" ]; then
+  log "$MODEL: reusing existing skeleton at $SKEL/$CUBE_NAME"
+else
 log "$MODEL: downloading $CUBE_NAME skeleton..."
 "$PY" - "$REPO_SILVER" "$CUBE_NAME" "$SKEL" <<'PY'
 import os
@@ -75,6 +81,7 @@ for path in files:
             time.sleep(2 * attempt)
 print(f"downloaded skeleton files: {len(seen)}")
 PY
+fi
 LOCAL_CUBE="$SKEL/$CUBE_NAME"
 
 # ---- 2. stamps = empty silver slots that HAVE a bronze parquet ------------
@@ -104,9 +111,9 @@ for stamp in sorted(empty & bronze, reverse=True):
 PY
 )
 
-if [ -z "$STAMPS" ]; then log "nothing to backfill (no empty slots with bronze parquets)"; rm -rf "$WORK"; exit 0; fi
+if [ -z "$STAMPS" ]; then log "nothing to backfill (no empty slots with bronze parquets)"; exit 0; fi
 log "backfillable runs: $(echo "$STAMPS" | wc -w | tr -d ' ') -> $(echo $STAMPS | tr '\n' ' ')"
-if [ "$LIST_ONLY" = "1" ]; then log "LIST_ONLY; exiting"; rm -rf "$WORK"; exit 0; fi
+if [ "$LIST_ONLY" = "1" ]; then log "LIST_ONLY; exiting (skeleton kept for the real run)"; exit 0; fi
 
 # ---- 3. download bronze parquets ------------------------------------------
 MARK="$WORK/.mark"; : > "$MARK"; sleep 1
@@ -127,7 +134,7 @@ OUT=$("$PY" "$DIR/convert_to_zarr.py" --source parquet --append --data-dir "$DD"
 echo "$OUT" | grep -E "written|already-filled|off-grid" | tail -1
 if echo "$OUT" | grep -q "+0 written"; then
   log "nothing newly written -> no silver upload"
-  rm -rf "$WORK"
+  rm -rf "$WORK/dd"
   exit 0
 fi
 
@@ -149,5 +156,5 @@ if ops:
     HfApi().create_commit(repo, repo_type="dataset", operations=ops,
                           commit_message=f"backfill-from-bronze: update {cube}")
 PY
-rm -rf "$WORK"
-log "DONE"
+rm -rf "$WORK/dd"
+log "DONE (skeleton kept in $SKEL; delete $WORK when finished backfilling)"
