@@ -76,6 +76,15 @@ print((value + dt.timedelta(hours=48)).strftime("%Y-%m-%d"))
 PY
 )
 
+# Skip when the resolved run is already in the cache: lets the cron run hourly
+# (minimizing fetch delay) while the heavy docker export still only happens
+# when DWD actually publishes a new run (4x/day). FORCE=1 overrides.
+RUN_MARKER="${OUT_STORE%.zarr}.run"
+if [ "${FORCE:-0}" != "1" ] && [ -f "$RUN_MARKER" ] && [ "$(cat "$RUN_MARKER" 2>/dev/null)" = "$STAMP" ]; then
+  echo "status=ok run=$RUN_ISO already cached (marker $RUN_MARKER); skipping export"
+  exit 0
+fi
+
 echo "model=dwd_icon"
 echo "run=$RUN_ISO"
 echo "bounds=$LAT_BOUNDS,$LON_BOUNDS"
@@ -110,4 +119,5 @@ RUN_STAMP="$STAMP" SCRAPED_AT="$(date -u +%Y%m%dT%H%M%SZ)" \
   "$PY" "$OM/postprocess.py" "$RAW" "$PARQUET"
 "$PY" "$DIR/convert_to_zarr.py" --source parquet --data-dir "$WORK" \
   --out "$OUT_STORE" --overwrite --model dwd_icon
+echo "$STAMP" > "$RUN_MARKER"
 echo "status=ok output_store=$OUT_STORE run=$RUN_ISO"
